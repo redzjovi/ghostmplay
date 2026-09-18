@@ -9,8 +9,9 @@ import { MarketplaceItemInfoEntity } from '../modules/marketplace/entities/marke
 const dbPath = process.env.GHOSTMPLAY_DB ?? 'ghostmplay.db'
 
 export const AppDataSource = new DataSource({
-  type: 'better-sqlite3',
-  database: dbPath,
+  type: 'sqljs',
+  location: dbPath,
+  autoSave: true,
   entities: [
     MarketplaceItemEntity,
     MarketplaceItemDetailEntity,

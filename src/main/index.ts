@@ -1,11 +1,22 @@
 import 'reflect-metadata'
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { MarketplaceService } from './modules/marketplace/marketplace.service'
 import { SyncService } from './modules/marketplace/sync.service'
+
+// Disable hardware acceleration for Linux headless / VM (fixes GPU process isn't usable)
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-gpu')
+app.commandLine.appendSwitch('disable-gpu-compositing')
+app.commandLine.appendSwitch('disable-software-rasterizer')
+app.commandLine.appendSwitch('disable-dev-shm-usage')
+app.commandLine.appendSwitch('no-sandbox')
+app.commandLine.appendSwitch('disable-features', 'VizDisplayCompositor')
+app.commandLine.appendSwitch('use-gl', 'swiftshader')
 
 let mainWindow: BrowserWindow | null = null
 let nestApp: Awaited<ReturnType<typeof NestFactory.createApplicationContext>> | null = null
@@ -25,6 +36,10 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  // Fallback if ready-to-show never fires (GPU/headless)
+  setTimeout(() => { if (mainWindow && !mainWindow.isVisible()) mainWindow.show() }, 2000)
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => console.error('[main] did-fail-load', code, desc, url))
+  mainWindow.webContents.on('did-finish-load', () => console.log('[main] did-finish-load', mainWindow?.webContents.getURL()))
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -34,12 +49,19 @@ function createWindow(): void {
 }
 
 async function bootstrapNest() {
-  // Point TypeORM DB to Electron userData in production
-  if (!is.dev && !process.env.GHOSTMPLAY_DB) {
-    process.env.GHOSTMPLAY_DB = join(app.getPath('userData'), 'ghostmplay.db')
+  // Point TypeORM DB to Electron userData in production, ensure dir exists
+  const dbPath = !is.dev && !process.env.GHOSTMPLAY_DB ? join(app.getPath('userData'), 'ghostmplay.db') : process.env.GHOSTMPLAY_DB
+  if (dbPath && dbPath !== ':memory:' && !is.dev) {
+    process.env.GHOSTMPLAY_DB = dbPath
+    try { mkdirSync(dirname(dbPath), { recursive: true }) } catch {}
+  } else if (dbPath && dbPath !== ':memory:') {
+    // dev: ensure cwd dir writable, create ghostmplay.db parent if needed
+    try { mkdirSync(dirname(join(process.cwd(), dbPath)), { recursive: true }) } catch {}
   }
-  nestApp = await NestFactory.createApplicationContext(AppModule, { logger: ['log', 'warn', 'error'] })
+  console.log('[main] GHOSTMPLAY_DB =', process.env.GHOSTMPLAY_DB ?? join(process.cwd(), 'ghostmplay.db'))
+  nestApp = await NestFactory.createApplicationContext(AppModule, { logger: ['log', 'warn', 'error', 'debug'] })
   await nestApp.init()
+  console.log('[main] Nest init OK')
 
   const marketplace = nestApp.get(MarketplaceService)
   const sync = nestApp.get(SyncService)
@@ -53,13 +75,21 @@ async function bootstrapNest() {
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.ghostmplay.desktop')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
-  await bootstrapNest()
+  try {
+    await bootstrapNest()
+  } catch (e) {
+    console.error('[main] bootstrapNest failed, opening window anyway:', e)
+  }
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
-})
+}).catch((e) => console.error('[main] app.whenReady failed', e))
+
+// Surface unhandled rejections that previously hung silently
+process.on('unhandledRejection', (e) => console.error('[main] unhandledRejection', e))
+process.on('uncaughtException', (e) => console.error('[main] uncaughtException', e))
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

@@ -6,8 +6,8 @@
   "type": "commonjs",
   "main": "./out/main/index.js",
   "scripts": {
-    "postinstall": "electron-rebuild -w better-sqlite3 -f || true",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -w sqlite3,better-sqlite3 -f || true",
+    "rebuild": "electron-rebuild -f -w sqlite3,better-sqlite3",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
@@ -34,6 +34,8 @@
     "pinia": "^2.3.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "sql.js": "^1.14.2",
+    "sqlite3": "^6.0.1",
     "typeorm": "^0.3.26",
     "vue": "^3.5.27",
     "vue-router": "^4.5.1"

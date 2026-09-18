@@ -2,7 +2,7 @@
 
 **Stack:** `Electron 33 + electron-vite + Vue 3 (Pinia/Router) + NestJS 10 (TypeORM 0.3 + better-sqlite3)`
 
-- No Cloudflare, no scraper. **Direct hit ghostmplay API** (reverse-engineered from DevTools) -> normalize -> SQLite (`ghostmplay.db` in `app.getPath('userData')` prod, `./ghostmplay.db` dev).
+- **Direct hit ghostmplay API** (reverse-engineered from DevTools) -> normalize -> SQLite (`ghostmplay.db` in `app.getPath('userData')` prod, `./ghostmplay.db` dev).
 - DB schema mirrors `note.txt` (5 entities): `marketplace_items`, `marketplace_item_detail`, `marketplace_item_attributes`, `marketplace_item_datas`, `marketplace_item_infos`.
 
 ## Develop on Linux (ship Windows later)

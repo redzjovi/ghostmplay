@@ -12,9 +12,11 @@ import { MarketplaceItemInfoEntity } from './modules/marketplace/entities/market
   imports: [
     ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
-      type: 'better-sqlite3',
+      type: 'sqljs',
       // Electron prod: userData path is injected at runtime in main.ts via GHOSTMPLAY_DB
-      database: process.env.GHOSTMPLAY_DB ?? 'ghostmplay.db',
+      // sql.js uses WASM, no native, avoids GLIBC_2.38 / ABI mismatch on Linux
+      location: process.env.GHOSTMPLAY_DB ?? 'ghostmplay.db',
+      autoSave: true,
       entities: [
         MarketplaceItemEntity,
         MarketplaceItemDetailEntity,
@@ -23,7 +25,7 @@ import { MarketplaceItemInfoEntity } from './modules/marketplace/entities/market
         MarketplaceItemInfoEntity
       ],
       synchronize: true, // dev auto-create; for prod use migrations (synchronize:false + migrationRun)
-      logging: false
+      logging: ['error', 'warn']
     }),
     MarketplaceModule
   ]
