@@ -1,0 +1,13 @@
+node_modules
+dist
+out
+build
+.better-sqlite3
+*.db
+*.sqlite
+*.sqlite3
+ghostmplay.db
+.env
+.env.local
+dist-electron
+.npm

@@ -1,0 +1,6 @@
+allowBuilds:
+  '@nestjs/core': true
+  better-sqlite3: true
+  electron: true
+  esbuild: true
+  vue-demi: true
