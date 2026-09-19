@@ -68,7 +68,15 @@ async function bootstrapNest() {
 
   ipcMain.handle('marketplace:list', async (_e, query) => marketplace.list(query))
   ipcMain.handle('marketplace:get', async (_e, tokenId: number) => marketplace.getByTokenId(tokenId))
-  ipcMain.handle('sync:refresh', async (_e, opts) => sync.refresh(opts))
+  ipcMain.handle('marketplace:filters', async () => marketplace.getDistinctFilters())
+  ipcMain.handle('marketplace:equipmentTypes', async () => marketplace.getDistinctEquipmentTypes())
+  ipcMain.handle('marketplace:gradeEffects', async () => marketplace.getDistinctGradeEffects())
+  ipcMain.handle('sync:refresh', async (_e, opts) => {
+    // opts may be {q, itemName, mode} from renderer; map to scrap
+    const itemName = (opts as { q?: string; itemName?: string })?.itemName ?? (opts as { q?: string })?.q
+    const mode = (opts as { mode?: 'all' | 'latest' })?.mode ?? 'latest'
+    return sync.refresh({ itemName, mode })
+  })
   ipcMain.handle('system:ping', async () => 'pong')
 }
 

@@ -1,4 +1,4 @@
-export type GradeEffect = 'Normal' | 'Rare'
+export type GradeEffect = 'Normal' | 'Rare' | 'Legacy' | string
 export type EquipmentType = string // e.g. Weapon, Armor, Accessory — from note.txt equipment_type
 export type AttributeType = 'Level' | 'Equipment Type' | 'Enchant' | 'Grade Effect'
 
@@ -34,5 +34,10 @@ export interface MarketplaceListQuery {
   equipmentType?: string
   gradeEffect?: GradeEffect
   level?: number
-  sort?: 'price_asc' | 'price_desc' | 'recent'
+  sort?: 'price_asc' | 'price_desc' | 'recent' | 'created_at_desc'
+}
+
+export interface MarketplaceFilterOptions {
+  equipmentTypes: EquipmentType[]
+  gradeEffects: GradeEffect[]
 }

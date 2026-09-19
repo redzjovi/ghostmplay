@@ -39,7 +39,7 @@ export class MarketplaceService {
 
     if (query.sort === 'price_asc') qb.orderBy('item.price', 'ASC')
     else if (query.sort === 'price_desc') qb.orderBy('item.price', 'DESC')
-    else qb.orderBy('item.createdAt', 'DESC')
+    else qb.orderBy('item.createdAt', 'DESC') // recent / created_at_desc / default
 
     qb.skip(skip).take(limit)
 
@@ -57,7 +57,50 @@ export class MarketplaceService {
     return { item, detail }
   }
 
+  async existsById(id: number): Promise<boolean> {
+    return (await this.itemRepo.count({ where: { id } })) > 0
+  }
+
+  async getDistinctEquipmentTypes(): Promise<string[]> {
+    const rows = await this.itemRepo
+      .createQueryBuilder('item')
+      .select('DISTINCT item.equipmentType', 'equipmentType')
+      .where("item.equipmentType IS NOT NULL AND TRIM(item.equipmentType) != ''")
+      .orderBy('item.equipmentType', 'ASC')
+      .getRawMany()
+    return rows.map((r) => r.equipmentType as string).filter(Boolean)
+  }
+
+  async getDistinctGradeEffects(): Promise<string[]> {
+    const rows = await this.itemRepo
+      .createQueryBuilder('item')
+      .select('DISTINCT item.gradeEffect', 'gradeEffect')
+      .where("item.gradeEffect IS NOT NULL AND TRIM(item.gradeEffect) != ''")
+      .orderBy('item.gradeEffect', 'ASC')
+      .getRawMany()
+    return rows.map((r) => r.gradeEffect as string).filter(Boolean)
+  }
+
+  async getDistinctFilters(): Promise<{ equipmentTypes: string[]; gradeEffects: string[] }> {
+    const [equipmentTypes, gradeEffects] = await Promise.all([this.getDistinctEquipmentTypes(), this.getDistinctGradeEffects()])
+    return { equipmentTypes, gradeEffects }
+  }
+
+  async findPriceById(id: number): Promise<number | null> {
+    const row = await this.itemRepo.findOne({ where: { id }, select: ['id', 'price'] })
+    return row ? Number(row.price) : null
+  }
+
+  async findPricesMap(ids: number[]): Promise<Map<number, number>> {
+    if (ids.length === 0) return new Map()
+    const rows = await this.itemRepo.find({ where: ids.map((id) => ({ id })), select: ['id', 'price'] } as never)
+    const m = new Map<number, number>()
+    for (const r of rows as MarketplaceItemEntity[]) m.set(Number(r.id), Number(r.price))
+    return m
+  }
+
   async upsertFromApi(raw: {
+    id: number // item_id reuse as PK per user
     tokenId: number
     ownerId: string
     ownerName: string
@@ -70,6 +113,7 @@ export class MarketplaceService {
     level: number
     enchant: number
     equipmentType: string
+    createdAt: Date // timestamptz from created_at epoch
     detail?: {
       attributes?: unknown
       datas?: unknown
@@ -78,9 +122,10 @@ export class MarketplaceService {
       marketTime?: string | null
     }
   }) {
-    let item = await this.itemRepo.findOne({ where: { tokenId: raw.tokenId } })
+    let item = await this.itemRepo.findOne({ where: { id: raw.id } })
     if (!item) {
       item = this.itemRepo.create({
+        id: raw.id,
         tokenId: raw.tokenId,
         ownerId: raw.ownerId,
         ownerName: raw.ownerName,
@@ -92,10 +137,12 @@ export class MarketplaceService {
         gradeEffect: raw.gradeEffect,
         level: raw.level,
         enchant: raw.enchant,
-        equipmentType: raw.equipmentType
+        equipmentType: raw.equipmentType,
+        createdAt: raw.createdAt
       })
     } else {
       Object.assign(item, {
+        tokenId: raw.tokenId,
         ownerId: raw.ownerId,
         ownerName: raw.ownerName,
         sellerId: raw.sellerId,
@@ -106,7 +153,8 @@ export class MarketplaceService {
         gradeEffect: raw.gradeEffect,
         level: raw.level,
         enchant: raw.enchant,
-        equipmentType: raw.equipmentType
+        equipmentType: raw.equipmentType,
+        createdAt: raw.createdAt
       })
     }
     item = await this.itemRepo.save(item)
