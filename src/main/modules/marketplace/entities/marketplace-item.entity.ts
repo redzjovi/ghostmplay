@@ -7,24 +7,24 @@ export class MarketplaceItemEntity {
   @PrimaryColumn({ type: 'integer' }) id!: number
 
   @Index({ unique: true })
-  @Column({ type: 'integer' })
+  @Column({ type: 'integer', name: 'token_id' })
   tokenId!: number
 
-  @Column({ type: 'text' }) ownerId!: string
-  @Column({ type: 'text' }) ownerName!: string
-  @Column({ type: 'text' }) sellerId!: string
-  @Column({ type: 'text' }) imageUrl!: string
+  @Column({ type: 'text', name: 'owner_id' }) ownerId!: string
+  @Column({ type: 'text', name: 'owner_name' }) ownerName!: string
+  @Column({ type: 'text', name: 'seller_id' }) sellerId!: string
+  @Column({ type: 'text', name: 'image_url' }) imageUrl!: string
   @Column({ type: 'text' }) name!: string
   @Column({ type: 'text', default: 'NUMI' }) currency!: string
   @Column({ type: 'real' }) price!: number
   @Index()
-  @Column({ type: 'text' }) gradeEffect!: string // Normal | Rare
+  @Column({ type: 'text', name: 'grade_effect' }) gradeEffect!: string // Normal | Rare
   @Column({ type: 'integer' }) level!: number
   @Column({ type: 'integer' }) enchant!: number
   @Index()
-  @Column({ type: 'text' }) equipmentType!: string
+  @Column({ type: 'text', name: 'equipment_type' }) equipmentType!: string
   // created_at as timestamptz per user (API gives epoch seconds)
-  @Column({ type: 'datetime' }) createdAt!: Date
+  @Column({ type: 'datetime', name: 'created_at' }) createdAt!: Date
 
   @OneToOne(() => MarketplaceItemDetailEntity, (d) => d.item, { cascade: true })
   detail?: MarketplaceItemDetailEntity

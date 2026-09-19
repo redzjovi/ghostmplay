@@ -46,6 +46,11 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // Auto-open DevTools in dev for API debugging
+  if (is.dev) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  }
 }
 
 async function bootstrapNest() {
@@ -66,18 +71,43 @@ async function bootstrapNest() {
   const marketplace = nestApp.get(MarketplaceService)
   const sync = nestApp.get(SyncService)
 
-  ipcMain.handle('marketplace:list', async (_e, query) => marketplace.list(query))
-  ipcMain.handle('marketplace:get', async (_e, tokenId: number) => marketplace.getByTokenId(tokenId))
-  ipcMain.handle('marketplace:filters', async () => marketplace.getDistinctFilters())
-  ipcMain.handle('marketplace:equipmentTypes', async () => marketplace.getDistinctEquipmentTypes())
-  ipcMain.handle('marketplace:gradeEffects', async () => marketplace.getDistinctGradeEffects())
+  const shouldLog = () => process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+
+  ipcMain.handle('marketplace:list', async (_e, query) => {
+    if (shouldLog()) console.log('[IPC] → marketplace:list', JSON.stringify(query))
+    const res = await marketplace.list(query)
+    if (shouldLog()) console.log('[IPC] ← marketplace:list', `total=${res.total} returned=${(res.data as unknown[]).length}`)
+    return res
+  })
+  ipcMain.handle('marketplace:get', async (_e, tokenId: number) => {
+    if (shouldLog()) console.log('[IPC] → marketplace:get', tokenId)
+    const res = await marketplace.getByTokenId(tokenId)
+    if (shouldLog()) console.log('[IPC] ← marketplace:get', res ? 'found' : 'null')
+    return res
+  })
+  ipcMain.handle('marketplace:filters', async () => {
+    if (shouldLog()) console.log('[IPC] → marketplace:filters')
+    const res = await marketplace.getDistinctFilters()
+    if (shouldLog()) console.log('[IPC] ← marketplace:filters', JSON.stringify(res))
+    return res
+  })
+  ipcMain.handle('marketplace:equipmentTypes', async () => {
+    if (shouldLog()) console.log('[IPC] → marketplace:equipmentTypes')
+    return marketplace.getDistinctEquipmentTypes()
+  })
+  ipcMain.handle('marketplace:gradeEffects', async () => {
+    if (shouldLog()) console.log('[IPC] → marketplace:gradeEffects')
+    return marketplace.getDistinctGradeEffects()
+  })
   ipcMain.handle('sync:refresh', async (_e, opts) => {
     // opts may be {q, itemName, mode} from renderer; map to scrap
+    if (shouldLog()) console.log('[IPC] → sync:refresh', JSON.stringify(opts))
     const itemName = (opts as { q?: string; itemName?: string })?.itemName ?? (opts as { q?: string })?.q
     const mode = (opts as { mode?: 'all' | 'latest' })?.mode ?? 'latest'
-    return sync.refresh({ itemName, mode })
+    const res = await sync.refresh({ itemName, mode })
+    if (shouldLog()) console.log('[IPC] ← sync:refresh', JSON.stringify(res))
+    return res
   })
-  ipcMain.handle('system:ping', async () => 'pong')
 }
 
 app.whenReady().then(async () => {

@@ -42,13 +42,13 @@ export class SyncService {
     @Inject(MarketplaceService) private readonly marketplace: MarketplaceService
   ) {}
 
-  /** Map API item -> DB entity fields */
+  /** Map API item -> DB entity fields (camelCase props, snake columns) */
   private mapItem(it: SearchRedisItem, ipfsBase = '') {
     const traits = parseTraitPairs(it.trait_pairs)
     const level = Number(it.trait_nums?.Level ?? traits['Level'] ?? 0)
     const enchant = Number(it.trait_nums?.Enchant ?? traits['Enchant'] ?? 0)
-    const equipmentType = String(traits['Equipment Type'] ?? 'Item')
-    const gradeEffect = String(traits['Grade Effect'] ?? 'Normal')
+    const equipmentType = String(traits['Equipment Type'] ?? 'Item').trim()
+    const gradeEffect = String(traits['Grade Effect'] ?? 'Normal').trim()
     // created_at is epoch seconds -> timestamptz Date
     const createdAt = new Date(Number(it.created_at) * 1000)
     return {
@@ -85,6 +85,8 @@ export class SyncService {
     const maxPages = mode === 'latest' ? Number.MAX_SAFE_INTEGER : (opts.maxPages ?? Number.MAX_SAFE_INTEGER)
 
     while (pages < maxPages) {
+      const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+      if (logApi) this.logger.log(`[Sync] → searchRedis page=${page} mode=${mode} itemName=${opts.itemName ?? ''} limit=${limit}`)
       const res = await this.client.searchRedis({
         serviceName: 'GhostMGlobal',
         itemName: opts.itemName,
@@ -92,6 +94,10 @@ export class SyncService {
         offset: page,
         limit
       })
+      if (logApi) {
+        const c = (res as unknown as { count?: number }).count ?? res.count
+        this.logger.log(`[Sync] ← searchRedis page=${page} count=${String(c)} items=${res.items?.length ?? 0}`)
+      }
       const ipfsBase = (res as unknown as { ipfs?: string }).ipfs ?? ''
       const items = res.items ?? []
       if (items.length === 0) {
@@ -144,6 +150,8 @@ export class SyncService {
     const limit = opts.limit ?? 20
     const page = opts.page ?? 1
     const offset = (page - 1) * limit
+    const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+    if (logApi) this.logger.log(`[Sync] → searchRedis(legacy) page=${page} q=${opts.q ?? ''}`)
     // single page fetch
     const res = await this.client.searchRedis({
       serviceName: 'GhostMGlobal',
@@ -152,6 +160,7 @@ export class SyncService {
       offset,
       limit
     })
+    if (logApi) this.logger.log(`[Sync] ← searchRedis(legacy) items=${res.items?.length ?? 0}`)
     let synced = 0
     const ipfsBase2 = (res as unknown as { ipfs?: string }).ipfs ?? ''
     for (const it of res.items ?? []) {

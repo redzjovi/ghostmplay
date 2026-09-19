@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, Like } from 'typeorm'
+import { Repository } from 'typeorm'
 import { MarketplaceItemEntity } from './entities/marketplace-item.entity'
 import { MarketplaceItemDetailEntity } from './entities/marketplace-item-detail.entity'
 import type { MarketplaceListQuery } from '@shared/types'
@@ -19,22 +19,51 @@ export class MarketplaceService {
     const limit = Math.min(100, Math.max(1, query.limit ?? 20))
     const skip = (page - 1) * limit
 
-    const where: Record<string, unknown>[] | Record<string, unknown> = {}
-    const andWhere: Record<string, unknown> = {}
-
-    if (query.equipmentType) andWhere['equipmentType'] = query.equipmentType
-    if (query.gradeEffect) andWhere['gradeEffect'] = query.gradeEffect
-    if (query.level !== undefined) andWhere['level'] = query.level
-
     const qb = this.itemRepo.createQueryBuilder('item')
+    let hasWhere = false
+    const qTrimmed = query.q?.trim()
+    if (qTrimmed) {
+      qb.where('LOWER(item.name) LIKE LOWER(:q)', { q: `%${qTrimmed}%` })
+      hasWhere = true
+    }
 
-    if (query.q) {
-      qb.where('item.name LIKE :q OR item.ownerName LIKE :q', { q: `%${query.q}%` })
-      if (Object.keys(andWhere).length) {
-        Object.entries(andWhere).forEach(([k, v]) => qb.andWhere(`item.${k} = :${k}`, { [k]: v }))
+    const normalizeMulti = (v: unknown): string[] | string | undefined => {
+      if (v === undefined || v === null) return undefined
+      if (Array.isArray(v)) {
+        const arr = (v as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+        return arr.length ? arr : undefined
       }
-    } else if (Object.keys(andWhere).length) {
-      qb.where(andWhere)
+      if (typeof v === 'string') {
+        const trimmed = v.trim()
+        if (!trimmed) return undefined
+        if (trimmed.includes(',')) {
+          const arr = trimmed.split(',').map((s) => s.trim()).filter(Boolean)
+          return arr.length ? arr : undefined
+        }
+        return trimmed
+      }
+      return v as string | undefined
+    }
+
+    // canonical snake_case sama dengan api & db (equipment_type / grade_effect), fallback to camelCase alias
+    const equipmentTypeVal = normalizeMulti(query.equipment_type ?? query.equipmentType)
+    const gradeEffectVal = normalizeMulti(query.grade_effect ?? query.gradeEffect)
+
+    const filters: Array<[string, unknown]> = []
+    if (equipmentTypeVal !== undefined) filters.push(['equipmentType', equipmentTypeVal])
+    if (gradeEffectVal !== undefined) filters.push(['gradeEffect', gradeEffectVal])
+    if (query.level !== undefined) filters.push(['level', query.level])
+
+    for (const [k, v] of filters) {
+      if (v === undefined || v === null) continue
+      if (Array.isArray(v) && v.length === 0) continue
+      if (Array.isArray(v)) {
+        if (hasWhere) qb.andWhere(`item.${k} IN (:...${k})`, { [k]: v })
+        else { qb.where(`item.${k} IN (:...${k})`, { [k]: v }); hasWhere = true }
+      } else {
+        if (hasWhere) qb.andWhere(`item.${k} = :${k}`, { [k]: v })
+        else { qb.where(`item.${k} = :${k}`, { [k]: v }); hasWhere = true }
+      }
     }
 
     if (query.sort === 'price_asc') qb.orderBy('item.price', 'ASC')
@@ -43,7 +72,16 @@ export class MarketplaceService {
 
     qb.skip(skip).take(limit)
 
+    if (process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1') {
+      try {
+        console.log('[MarketplaceService.list] SQL:', qb.getSql(), 'PARAMS:', qb.getParameters(), 'QUERY:', JSON.stringify(query))
+      } catch {}
+    }
+
     const [data, total] = await qb.getManyAndCount()
+    if (process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1') {
+      console.log(`[MarketplaceService.list] result total=${total} returned=${data.length} page=${page} limit=${limit}`)
+    }
     return { data, total, page, limit }
   }
 

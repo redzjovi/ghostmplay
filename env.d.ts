@@ -18,8 +18,5 @@ interface Window {
     sync: {
       refresh: (opts?: { itemName?: string; q?: string; mode?: 'all' | 'latest'; page?: number; limit?: number }) => Promise<{ synced: number }>
     }
-    system: {
-      ping: () => Promise<string>
-    }
   }
 }

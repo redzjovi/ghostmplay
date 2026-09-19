@@ -6,10 +6,10 @@ import { MarketplaceItemInfoEntity } from './marketplace-item-info.entity'
 
 @Entity('marketplace_item_detail')
 export class MarketplaceItemDetailEntity {
-  @PrimaryColumn({ type: 'integer' }) itemId!: number
+  @PrimaryColumn({ type: 'integer', name: 'item_id' }) itemId!: number
 
   @OneToOne(() => MarketplaceItemEntity, (i) => i.detail, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'itemId' })
+  @JoinColumn({ name: 'item_id' })
   item!: MarketplaceItemEntity
 
   // raw jsonb mirrors from note.txt — kept for fidelity + fast read
@@ -17,8 +17,8 @@ export class MarketplaceItemDetailEntity {
   @Column({ type: 'simple-json', nullable: true }) datas!: unknown
   @Column({ type: 'simple-json', nullable: true }) infos!: unknown
 
-  @Column({ type: 'datetime', nullable: true }) mintTime!: Date | null
-  @Column({ type: 'datetime', nullable: true }) marketTime!: Date | null
+  @Column({ type: 'datetime', nullable: true, name: 'mint_time' }) mintTime!: Date | null
+  @Column({ type: 'datetime', nullable: true, name: 'market_time' }) marketTime!: Date | null
 
   @OneToMany(() => MarketplaceItemAttributeEntity, (a) => a.item, { cascade: true })
   attributeRows!: MarketplaceItemAttributeEntity[]

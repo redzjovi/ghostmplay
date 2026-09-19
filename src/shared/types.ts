@@ -31,10 +31,14 @@ export interface MarketplaceListQuery {
   page?: number
   limit?: number
   q?: string
-  equipmentType?: string | string[]
-  gradeEffect?: GradeEffect | GradeEffect[]
+  equipment_type?: string | string[]
+  grade_effect?: GradeEffect | GradeEffect[]
   level?: number
   sort?: 'price_asc' | 'price_desc' | 'recent' | 'created_at_desc'
+  /** @deprecated alias — use equipment_type (snake_case sama dengan api & db) */
+  equipmentType?: string | string[]
+  /** @deprecated alias — use grade_effect */
+  gradeEffect?: GradeEffect | GradeEffect[]
 }
 
 export interface MarketplaceFilterOptions {

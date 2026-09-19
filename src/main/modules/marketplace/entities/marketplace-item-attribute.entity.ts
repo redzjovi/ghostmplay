@@ -6,11 +6,11 @@ export class MarketplaceItemAttributeEntity {
   @PrimaryGeneratedColumn() id!: number
 
   @Index()
-  @Column({ type: 'integer' })
+  @Column({ type: 'integer', name: 'item_id' })
   itemId!: number
 
   @ManyToOne(() => MarketplaceItemEntity, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'itemId' })
+  @JoinColumn({ name: 'item_id' })
   item!: MarketplaceItemEntity
 
   @Column({ type: 'text' }) type!: string // Level | Equipment Type | Enchant | Grade Effect

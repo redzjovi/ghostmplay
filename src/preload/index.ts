@@ -12,9 +12,6 @@ const api = {
   sync: {
     refresh: (opts?: { itemName?: string; q?: string; page?: number; limit?: number; mode?: 'all' | 'latest' }) =>
       ipcRenderer.invoke('sync:refresh', opts) as Promise<{ synced: number }>
-  },
-  system: {
-    ping: () => ipcRenderer.invoke('system:ping') as Promise<string>
   }
 }
 

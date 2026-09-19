@@ -61,14 +61,36 @@ export class GhostMarketplaceClient {
       ...(opts.itemName ? { itemName: opts.itemName } : {})
     }
     const url = `${this.baseURL}/api/users/market/search-redis`
-    this.logger.log(`GET ${url} offset=${params.offset} limit=${params.limit} sort=${params.sort}`)
-    const { data } = await firstValueFrom(
-      this.http.get<{ message?: string; data?: SearchRedisResponse } & SearchRedisResponse>(url, {
-        headers: this.headers,
-        params,
-        timeout: 15000
-      })
-    )
+    // Log BEFORE hit API (debug)
+    const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+    if (logApi) {
+      this.logger.log(`[API] → GET ${url} params=${JSON.stringify(params)} opts=${JSON.stringify(opts)}`)
+      this.logger.debug(`[API] headers keys=${Object.keys(this.headers).join(',')}`)
+    } else {
+      this.logger.log(`GET ${url} offset=${params.offset} limit=${params.limit} sort=${params.sort}`)
+    }
+    let data: { message?: string; data?: SearchRedisResponse } & SearchRedisResponse
+    try {
+      const res = await firstValueFrom(
+        this.http.get<{ message?: string; data?: SearchRedisResponse } & SearchRedisResponse>(url, {
+          headers: this.headers,
+          params,
+          timeout: 15000
+        })
+      )
+      data = res.data
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      this.logger.error(`[API] ✗ GET ${url} params=${JSON.stringify(params)} error=${msg}`)
+      throw e
+    }
+    if (logApi) {
+      const preview = data as unknown as Record<string, unknown>
+      const inner = (preview.data as Record<string, unknown> | undefined) ?? preview
+      const count = (inner as Record<string, unknown>).count
+      const itemsLen = Array.isArray((inner as Record<string, unknown>).items) ? ((inner as Record<string, unknown>).items as unknown[]).length : 'n/a'
+      this.logger.log(`[API] ← GET ${url} count=${String(count)} items=${String(itemsLen)}`)
+    }
     // API wraps in {message, data:{count,ipfs,items}} (see curl response)
     const unwrapped = (data as { data?: SearchRedisResponse }).data ?? (data as SearchRedisResponse)
     return unwrapped as SearchRedisResponse

@@ -1,7 +1,7 @@
 <template>
   <div class="max-w-3xl mx-auto p-5 space-y-4">
     <Button variant="ghost" size="sm" as-child>
-      <router-link to="/marketplace"><ArrowLeft class="mr-2 h-4 w-4" /> Back</router-link>
+      <router-link to="/"><ArrowLeft class="mr-2 h-4 w-4" /> Back</router-link>
     </Button>
     <h2 class="text-xl font-semibold">Item #{{ tokenId }}</h2>
     <div v-if="loading" class="space-y-3">
@@ -24,7 +24,7 @@
               <Badge v-if="item.enchant" variant="outline">+{{ item.enchant }}</Badge>
             </div>
             <div class="flex items-center gap-2 font-semibold">
-              <img v-if="isNUMI(item.currency)" :src="NUMI_ICON_URL" alt="NUMI" class="h-[22px] w-[22px] rounded object-contain bg-muted" loading="lazy" @error="(e:any)=>e.target.style.display='none'" />
+              <img v-if="isNUMI(item.currency)" :src="NUMI_ICON_URL" alt="NUMI" class="h-[22px] w-[22px] rounded object-contain bg-muted" @error="(e:any)=>e.target.style.display='none'" />
               <span>{{ item.price }}</span><span class="text-sm font-normal text-muted-foreground">{{ item.currency }}</span>
             </div>
             <p class="text-xs text-muted-foreground">Token #{{ item.tokenId }} · Seller {{ item.sellerId }}</p>

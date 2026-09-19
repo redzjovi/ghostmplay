@@ -25,7 +25,7 @@ import { MarketplaceItemInfoEntity } from './modules/marketplace/entities/market
         MarketplaceItemInfoEntity
       ],
       synchronize: true, // dev auto-create; for prod use migrations (synchronize:false + migrationRun)
-      logging: ['error', 'warn']
+      logging: process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1' ? ['query', 'error', 'warn'] : ['error', 'warn']
     }),
     MarketplaceModule
   ]

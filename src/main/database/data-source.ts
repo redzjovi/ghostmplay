@@ -21,7 +21,7 @@ export const AppDataSource = new DataSource({
   ],
   migrations: [__dirname + '/migrations/*.{ts,js}'],
   synchronize: false,
-  logging: false
+  logging: process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1' ? ['query', 'error'] : false
 })
 
 export default AppDataSource
