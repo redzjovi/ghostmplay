@@ -31,8 +31,8 @@ export interface MarketplaceListQuery {
   page?: number
   limit?: number
   q?: string
-  equipmentType?: string
-  gradeEffect?: GradeEffect
+  equipmentType?: string | string[]
+  gradeEffect?: GradeEffect | GradeEffect[]
   level?: number
   sort?: 'price_asc' | 'price_desc' | 'recent' | 'created_at_desc'
 }

@@ -1,10 +1,11 @@
 <template>
-  <div class="app">
-    <nav class="nav">
-      <router-link to="/">Home</router-link>
-      <router-link to="/marketplace">Marketplace</router-link>
-      <span class="spacer" />
-      <button type="button" @click="onPing">{{ ping }}</button>
+  <div class="min-h-screen bg-background text-foreground">
+    <nav class="flex items-center gap-4 px-5 py-3 border-b bg-card">
+      <router-link to="/" class="text-sm font-medium hover:text-primary">Home</router-link>
+      <router-link to="/marketplace" class="text-sm font-medium hover:text-primary">Marketplace</router-link>
+      <span class="flex-1" />
+      <ThemeToggle />
+      <Button variant="outline" size="sm" @click="onPing">{{ ping }}</Button>
     </nav>
     <router-view />
   </div>
@@ -12,6 +13,8 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { Button } from '@/components/ui/button'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 const ping = ref('ping')
 async function onPing() {
   try {
@@ -22,12 +25,3 @@ async function onPing() {
   }
 }
 </script>
-
-<style>
-* { box-sizing: border-box; }
-body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background:#0b0e14; color:#e6e8ee; }
-a { color:#7aa5ff; text-decoration:none; }
-.nav { display:flex; gap:16px; padding:14px 20px; border-bottom:1px solid #1e2533; align-items:center; }
-.spacer { flex:1; }
-button { background:#1e2533; color:#e6e8ee; border:1px solid #2a3447; padding:6px 10px; border-radius:8px; cursor:pointer; }
-</style>

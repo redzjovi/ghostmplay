@@ -1,26 +1,52 @@
 <template>
-  <div class="page">
-    <router-link to="/marketplace">← Back</router-link>
-    <h2>Item #{{ tokenId }}</h2>
-    <p v-if="loading" class="hint">Loading…</p>
-    <div v-else-if="item" class="detail">
-      <img :src="normalizeImageUrl(item.imageUrl)" :alt="item.name" class="detail-img" @error="(e:any)=>e.target.src='https://via.placeholder.com/320x320?text=No+Image'" />
-      <div class="detail-info">
-        <h3>{{ item.name }}</h3>
-        <p class="meta">{{ item.equipmentType }} · Lv {{ item.level }} · +{{ item.enchant }} · {{ item.gradeEffect }}</p>
-        <p class="price with-icon">
-          <img v-if="isNUMI(item.currency)" :src="NUMI_ICON_URL" alt="NUMI" class="currency-icon detail" width="22" height="22" loading="lazy" @error="(e:any)=>e.target.style.display='none'" />
-          <span>{{ item.price }}</span><span class="currency-text">{{ item.currency }}</span>
-        </p>
-        <p class="hint">Token #{{ item.tokenId }} · Seller {{ item.sellerId }}</p>
-      </div>
+  <div class="max-w-3xl mx-auto p-5 space-y-4">
+    <Button variant="ghost" size="sm" as-child>
+      <router-link to="/marketplace"><ArrowLeft class="mr-2 h-4 w-4" /> Back</router-link>
+    </Button>
+    <h2 class="text-xl font-semibold">Item #{{ tokenId }}</h2>
+    <div v-if="loading" class="space-y-3">
+      <Skeleton class="h-40 w-full" />
+      <Skeleton class="h-4 w-3/4" />
+      <Skeleton class="h-4 w-1/2" />
     </div>
-    <pre v-else class="block">{{ JSON.stringify(data, null, 2) }}</pre>
+    <Card v-else-if="item">
+      <CardContent class="pt-6">
+        <div class="flex gap-4">
+          <AspectRatio :ratio="1" class="w-40 overflow-hidden rounded-lg bg-muted">
+            <img :src="normalizeImageUrl(item.imageUrl)" :alt="item.name" class="h-full w-full object-cover" @error="(e:any)=>e.target.src='https://via.placeholder.com/320x320?text=No+Image'" />
+          </AspectRatio>
+          <div class="flex flex-1 flex-col gap-2 min-w-0">
+            <CardTitle class="text-lg">{{ item.name }}</CardTitle>
+            <div class="flex flex-wrap gap-1">
+              <Badge variant="secondary">{{ item.equipmentType }}</Badge>
+              <Badge variant="outline">Lv {{ item.level }}</Badge>
+              <Badge variant="outline">{{ item.gradeEffect }}</Badge>
+              <Badge v-if="item.enchant" variant="outline">+{{ item.enchant }}</Badge>
+            </div>
+            <div class="flex items-center gap-2 font-semibold">
+              <img v-if="isNUMI(item.currency)" :src="NUMI_ICON_URL" alt="NUMI" class="h-[22px] w-[22px] rounded object-contain bg-muted" loading="lazy" @error="(e:any)=>e.target.style.display='none'" />
+              <span>{{ item.price }}</span><span class="text-sm font-normal text-muted-foreground">{{ item.currency }}</span>
+            </div>
+            <p class="text-xs text-muted-foreground">Token #{{ item.tokenId }} · Seller {{ item.sellerId }}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+    <Alert v-else variant="destructive">
+      <AlertDescription><pre class="whitespace-pre-wrap text-xs">{{ JSON.stringify(data, null, 2) }}</pre></AlertDescription>
+    </Alert>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ArrowLeft } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { AspectRatio } from '@/components/ui/aspect-ratio'
 const props = defineProps<{ tokenId: string }>()
 const loading = ref(true)
 const data = ref<unknown>(null)
@@ -52,17 +78,3 @@ onMounted(async () => {
   } finally { loading.value = false }
 })
 </script>
-
-<style scoped>
-.page{padding:20px}
-.hint{color:#9aa3b2}
-.block{background:#111722; border:1px solid #1e2533; border-radius:10px; padding:12px; overflow:auto}
-.detail{display:flex; gap:16px; align-items:flex-start; background:#111722; border:1px solid #1e2533; border-radius:12px; padding:16px; margin-top:12px}
-.detail-img{width:160px; height:160px; object-fit:cover; border-radius:8px; background:#0b0e14; flex:0 0 160px}
-.detail-info{display:flex; flex-direction:column; gap:8px; min-width:0}
-.detail-info h3{margin:0; font-size:18px}
-.price{display:inline-flex; align-items:center; gap:6px; font-weight:700; line-height:1; font-size:16px}
-.currency-icon{width:18px; height:18px; object-fit:contain; flex:0 0 18px; border-radius:4px; background:#0b0e14}
-.currency-icon.detail{width:22px; height:22px; flex:0 0 22px}
-.meta{color:#9aa3b2; font-size:12px}
-</style>
