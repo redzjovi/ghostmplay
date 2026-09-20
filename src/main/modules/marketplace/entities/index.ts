@@ -1,5 +1,2 @@
 export { MarketplaceItemEntity } from './marketplace-item.entity'
 export { MarketplaceItemDetailEntity } from './marketplace-item-detail.entity'
-export { MarketplaceItemAttributeEntity } from './marketplace-item-attribute.entity'
-export { MarketplaceItemDataEntity } from './marketplace-item-data.entity'
-export { MarketplaceItemInfoEntity } from './marketplace-item-info.entity'

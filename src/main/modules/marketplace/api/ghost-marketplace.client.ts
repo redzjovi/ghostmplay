@@ -104,8 +104,53 @@ export class GhostMarketplaceClient {
     return this.searchRedis({ itemName: query.q, offset, limit, sort: 'created_at_desc' })
   }
 
-  async detail(_tokenId: number) {
-    // TODO: detail endpoint not yet provided
-    return null
+  async detail(tokenId: number, serviceName = 'GhostMGlobal'): Promise<ItemDetailResponse | null> {
+    const url = `${this.baseURL}/api/users/nft/item-detail`
+    const body = new URLSearchParams({ tokenId: String(tokenId), serviceName }).toString()
+    const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+    if (logApi) this.logger.log(`[API] → POST ${url} tokenId=${tokenId} serviceName=${serviceName}`)
+    try {
+      const { data } = await firstValueFrom(
+        this.http.post<{ data?: ItemDetailResponse } & ItemDetailResponse>(url, body, {
+          headers: { ...this.headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 15000
+        })
+      )
+      const unwrapped = (data as { data?: ItemDetailResponse }).data ?? (data as ItemDetailResponse)
+      if (logApi) this.logger.log(`[API] ← POST ${url} tokenId=${tokenId} name=${(unwrapped as ItemDetailResponse).details?.name ?? 'n/a'} attrs=${(unwrapped as ItemDetailResponse).details?.attributes?.length ?? 'n/a'}`)
+      return unwrapped as ItemDetailResponse
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      this.logger.error(`[API] ✗ POST ${url} tokenId=${tokenId} error=${msg}`)
+      return null
+    }
   }
+}
+
+export interface ItemDetailResponse {
+  tokenId: number
+  indexId: string
+  serviceName: string
+  ipfs: string
+  owner: string
+  ownerName: string
+  viewCount: number
+  price: number
+  details: {
+    name: string
+    description: string
+    image: string // CID e.g. Qmcz...
+    external_url: string
+    tag: unknown
+    attributes: { trait_type: string; value: string }[]
+  }
+  viewData: {
+    datas: { title: string; values: unknown[]; class?: string }[]
+    infos: Record<string, unknown>[]
+    viewType?: string
+  }
+  mintTime: string | null // "2026-09-20 00:06:31 +0900 KST"
+  marketTime: string | null
+  state: string
+  descriptionStyle?: unknown[]
 }

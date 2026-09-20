@@ -89,8 +89,7 @@ export class MarketplaceService {
     const item = await this.itemRepo.findOne({ where: { tokenId } })
     if (!item) return null
     const detail = await this.detailRepo.findOne({
-      where: { itemId: item.id },
-      relations: ['attributeRows', 'dataRows', 'infoRows']
+      where: { itemId: item.id }
     })
     return { item, detail }
   }
@@ -140,9 +139,8 @@ export class MarketplaceService {
   async upsertFromApi(raw: {
     id: number // item_id reuse as PK per user
     tokenId: number
-    ownerId: string
-    ownerName: string
     sellerId: string
+    sellerName: string | null
     imageUrl: string
     name: string
     currency?: string
@@ -151,23 +149,23 @@ export class MarketplaceService {
     level: number
     enchant: number
     equipmentType: string
-    createdAt: Date // timestamptz from created_at epoch
+    createdAt: Date // timestamptz from created_at epoch == market_time (duplicate removed)
+    mintTime?: Date | string | null // moved from detail to item
+    sold?: boolean
     detail?: {
       attributes?: unknown
       datas?: unknown
       infos?: unknown
-      mintTime?: string | null
-      marketTime?: string | null
     }
   }) {
+    const mintTimeVal = raw.mintTime ? new Date(raw.mintTime as string) : null
     let item = await this.itemRepo.findOne({ where: { id: raw.id } })
     if (!item) {
       item = this.itemRepo.create({
         id: raw.id,
         tokenId: raw.tokenId,
-        ownerId: raw.ownerId,
-        ownerName: raw.ownerName,
         sellerId: raw.sellerId,
+        sellerName: raw.sellerName ?? null,
         imageUrl: raw.imageUrl,
         name: raw.name,
         currency: raw.currency ?? 'NUMI',
@@ -176,14 +174,15 @@ export class MarketplaceService {
         level: raw.level,
         enchant: raw.enchant,
         equipmentType: raw.equipmentType,
-        createdAt: raw.createdAt
+        createdAt: raw.createdAt,
+        mintTime: mintTimeVal && !isNaN(mintTimeVal.getTime()) ? mintTimeVal : null,
+        sold: raw.sold ?? false
       })
     } else {
       Object.assign(item, {
         tokenId: raw.tokenId,
-        ownerId: raw.ownerId,
-        ownerName: raw.ownerName,
         sellerId: raw.sellerId,
+        sellerName: raw.sellerName ?? null,
         imageUrl: raw.imageUrl,
         name: raw.name,
         currency: raw.currency ?? item.currency,
@@ -192,7 +191,9 @@ export class MarketplaceService {
         level: raw.level,
         enchant: raw.enchant,
         equipmentType: raw.equipmentType,
-        createdAt: raw.createdAt
+        createdAt: raw.createdAt,
+        ...(mintTimeVal && !isNaN(mintTimeVal.getTime()) ? { mintTime: mintTimeVal } : {}),
+        ...(raw.sold !== undefined ? { sold: raw.sold } : {})
       })
     }
     item = await this.itemRepo.save(item)
@@ -204,16 +205,12 @@ export class MarketplaceService {
           itemId: item.id,
           attributes: raw.detail.attributes ?? null,
           datas: raw.detail.datas ?? null,
-          infos: raw.detail.infos ?? null,
-          mintTime: raw.detail.mintTime ? new Date(raw.detail.mintTime) : null,
-          marketTime: raw.detail.marketTime ? new Date(raw.detail.marketTime) : null
+          infos: raw.detail.infos ?? null
         })
       } else {
         detail.attributes = raw.detail.attributes ?? detail.attributes
         detail.datas = raw.detail.datas ?? detail.datas
         detail.infos = raw.detail.infos ?? detail.infos
-        if (raw.detail.mintTime) detail.mintTime = new Date(raw.detail.mintTime)
-        if (raw.detail.marketTime) detail.marketTime = new Date(raw.detail.marketTime)
       }
       await this.detailRepo.save(detail)
     }

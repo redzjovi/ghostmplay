@@ -21,7 +21,6 @@ marketplace_item_detail (
   infos jsonb,
   mint_time timestamptz,
   market_time timestamptz,
-
 )
 marketplace_item_attributes (
   item_id int,
@@ -29,7 +28,8 @@ marketplace_item_attributes (
   value string 
 )
 marketplace_item_data {
-  item
+  item id int,
+  class string,
   title (Basic Effect, Set Composition, Set Effect)
   values
 }

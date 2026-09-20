@@ -10,9 +10,8 @@ export class MarketplaceItemEntity {
   @Column({ type: 'integer', name: 'token_id' })
   tokenId!: number
 
-  @Column({ type: 'text', name: 'owner_id' }) ownerId!: string
-  @Column({ type: 'text', name: 'owner_name' }) ownerName!: string
   @Column({ type: 'text', name: 'seller_id' }) sellerId!: string
+  @Column({ type: 'text', nullable: true, name: 'seller_name' }) sellerName!: string | null
   @Column({ type: 'text', name: 'image_url' }) imageUrl!: string
   @Column({ type: 'text' }) name!: string
   @Column({ type: 'text', default: 'NUMI' }) currency!: string
@@ -23,8 +22,10 @@ export class MarketplaceItemEntity {
   @Column({ type: 'integer' }) enchant!: number
   @Index()
   @Column({ type: 'text', name: 'equipment_type' }) equipmentType!: string
-  // created_at as timestamptz per user (API gives epoch seconds)
+  // created_at as timestamptz per user (API gives epoch seconds) — equals market_time (duplicate, market_time removed from detail)
   @Column({ type: 'datetime', name: 'created_at' }) createdAt!: Date
+  @Column({ type: 'datetime', nullable: true, name: 'mint_time' }) mintTime!: Date | null
+  @Column({ type: 'boolean', default: false, name: 'sold' }) sold!: boolean
 
   @OneToOne(() => MarketplaceItemDetailEntity, (d) => d.item, { cascade: true })
   detail?: MarketplaceItemDetailEntity
