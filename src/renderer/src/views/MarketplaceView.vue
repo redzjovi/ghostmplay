@@ -114,7 +114,7 @@
           </ToggleGroup>
         </div>
 
-        <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncMode }} (sort=created_at_desc, limit 12{{ syncMode==='latest' ? ', break on id+price' : '' }})…</div>
+        <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncMode }} (sort=created_at_desc, limit 12{{ syncMode==='latest' ? ', break on id+created_at' : '' }})…</div>
         <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="lastSynced!==null"> · Last sync ({{ lastMode }}): {{ lastSynced }} new</span> · Page {{ page }}/{{ totalPages }}</p>
 
         <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">

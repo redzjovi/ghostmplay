@@ -139,6 +139,18 @@ export class MarketplaceService {
     return m
   }
 
+  async findCreatedAtMap(ids: number[]): Promise<Map<number, number>> {
+    if (ids.length === 0) return new Map()
+    const rows = await this.itemRepo.find({ where: ids.map((id) => ({ id })), select: ['id', 'createdAt'] } as never)
+    const m = new Map<number, number>()
+    for (const r of rows as MarketplaceItemEntity[]) {
+      const v = (r as MarketplaceItemEntity).createdAt
+      const epoch = v instanceof Date ? Math.floor(v.getTime() / 1000) : Math.floor(new Date(v as unknown as string).getTime() / 1000)
+      if (Number.isFinite(epoch)) m.set(Number(r.id), epoch)
+    }
+    return m
+  }
+
   // ---- Favorites ----
   private toFavoriteDto(e: MarketplaceFavoriteEntity): MarketplaceFavorite {
     return {

@@ -122,11 +122,11 @@ export class SyncService {
   }
 
   /**
-   * Scrap with sort=created_at_desc, limit 12 (offset=page).
-   * - latest: no limit page, break after found id+price same in DB
-   * - all: infinite until end (items.length < limit)
-   * Fetch detail only for new or price-changed items, parallel limit 3.
-   */
+    * Scrap with sort=created_at_desc, limit 12 (offset=page).
+    * - latest: no limit page, break after found id+created_at same in DB
+    * - all: infinite until end (items.length < limit)
+    * Fetch detail only for new or created_at-changed items, parallel limit 3.
+    */
   async refresh(opts: { itemName?: string; maxPages?: number; mode?: SyncMode } = {}) {
     const mode = opts.mode ?? 'latest'
     const limit = 12
@@ -158,18 +158,18 @@ export class SyncService {
         break
       }
 
-      let foundSamePrice = false
-      // For latest: batch fetch prices for break check id+price same; for all: no break check
-      const priceMap = mode === 'latest' ? await this.marketplace.findPricesMap(items.map((it) => Number((it as SearchRedisItem).item_id))) : new Map<number, number>()
+      let foundSameItem = false
+      // For latest: batch fetch createdAt for break check id+created_at same; for all: no break check
+      const createdAtMap = mode === 'latest' ? await this.marketplace.findCreatedAtMap(items.map((it) => Number((it as SearchRedisItem).item_id))) : new Map<number, number>()
 
-      // Determine which items need detail fetch (new or price changed)
+      // Determine which items need detail fetch (new or created_at changed)
       const toFetch: SearchRedisItem[] = []
       if (mode === 'latest') {
         for (const it of items as SearchRedisItem[]) {
           const id = Number(it.item_id)
-          const incomingPrice = Number(it.price ?? 0)
-          const existing = priceMap.get(id)
-          if (existing === undefined || existing !== incomingPrice) {
+          const incomingCreatedAt = Number((it as SearchRedisItem).created_at ?? 0)
+          const existing = createdAtMap.get(id)
+          if (existing === undefined || existing !== incomingCreatedAt) {
             toFetch.push(it)
           }
         }
@@ -194,21 +194,21 @@ export class SyncService {
 
       for (const it of items) {
         const incomingId = Number((it as SearchRedisItem).item_id)
-        const incomingPrice = Number((it as SearchRedisItem).price ?? 0)
+        const incomingCreatedAt = Number((it as SearchRedisItem).created_at ?? 0)
         if (mode === 'latest') {
-          const existingPrice = priceMap.get(incomingId)
-          if (existingPrice !== undefined) {
-            if (existingPrice === incomingPrice) {
-              foundSamePrice = true
-              this.logger.log(`Break scrap: id ${incomingId} price ${incomingPrice} same as DB at page ${page}`)
+          const existingCreatedAt = createdAtMap.get(incomingId)
+          if (existingCreatedAt !== undefined) {
+            if (existingCreatedAt === incomingCreatedAt) {
+              foundSameItem = true
+              this.logger.log(`Break scrap: id ${incomingId} created_at ${incomingCreatedAt} same as DB at page ${page}`)
               break
             }
-            this.logger.log(`Price changed id ${incomingId}: ${existingPrice} -> ${incomingPrice}, updating`)
+            this.logger.log(`CreatedAt changed id ${incomingId}: ${existingCreatedAt} -> ${incomingCreatedAt}, updating`)
           }
         }
         const hasFetchedDetail = detailsMap.has(incomingId)
         const detail = hasFetchedDetail ? (detailsMap.get(incomingId) ?? null) : null
-        const sold = hasFetchedDetail ? detail === null : undefined // only set sold when we fetched detail (price change) per user #2
+        const sold = hasFetchedDetail ? detail === null : undefined // only set sold when we fetched detail (created_at change) per user #2
         const mapped = this.mapItem(it as SearchRedisItem, ipfsBase, detail)
         // Prepare detail payload for upsert (only attributes/datas/infos, mintTime moved to item)
         const detailPayload = detail
@@ -228,10 +228,10 @@ export class SyncService {
           detail: detailPayload as never
         })
         totalSynced++
-        if (mode === 'latest') priceMap.set(incomingId, incomingPrice)
+        if (mode === 'latest') createdAtMap.set(incomingId, incomingCreatedAt)
       }
 
-      if (mode === 'latest' && foundSamePrice) break
+      if (mode === 'latest' && foundSameItem) break
 
       // if less than limit, no more pages
       if (items.length < limit) {
