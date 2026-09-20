@@ -3,7 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import { MarketplaceItemEntity } from './entities/marketplace-item.entity'
 import { MarketplaceItemDetailEntity } from './entities/marketplace-item-detail.entity'
-import type { MarketplaceListQuery } from '@shared/types'
+import { MarketplaceFavoriteEntity } from './entities/marketplace-favorite.entity'
+import type { MarketplaceListQuery, MarketplaceFavorite, CreateFavoriteInput, UpdateFavoriteInput } from '@shared/types'
 
 @Injectable()
 export class MarketplaceService {
@@ -11,7 +12,9 @@ export class MarketplaceService {
     @InjectRepository(MarketplaceItemEntity)
     private readonly itemRepo: Repository<MarketplaceItemEntity>,
     @InjectRepository(MarketplaceItemDetailEntity)
-    private readonly detailRepo: Repository<MarketplaceItemDetailEntity>
+    private readonly detailRepo: Repository<MarketplaceItemDetailEntity>,
+    @InjectRepository(MarketplaceFavoriteEntity)
+    private readonly favoriteRepo: Repository<MarketplaceFavoriteEntity>
   ) {}
 
   async list(query: MarketplaceListQuery = {}) {
@@ -134,6 +137,103 @@ export class MarketplaceService {
     const m = new Map<number, number>()
     for (const r of rows as MarketplaceItemEntity[]) m.set(Number(r.id), Number(r.price))
     return m
+  }
+
+  // ---- Favorites ----
+  private toFavoriteDto(e: MarketplaceFavoriteEntity): MarketplaceFavorite {
+    return {
+      id: e.id,
+      name: e.name,
+      q: e.q ?? null,
+      equipmentTypes: e.equipmentTypes ?? [],
+      gradeEffects: e.gradeEffects ?? [],
+      sort: e.sort ?? 'recent',
+      createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : String(e.createdAt),
+      updatedAt: e.updatedAt instanceof Date ? e.updatedAt.toISOString() : String(e.updatedAt)
+    }
+  }
+
+  private normalizeFavoriteArrays(input: CreateFavoriteInput | UpdateFavoriteInput): { equipmentTypes: string[]; gradeEffects: string[]; q: string | null; sort: string } {
+    const qRaw = (input as unknown as Record<string, unknown>).q
+    const q = typeof qRaw === 'string' ? (qRaw.trim() || null) : (qRaw == null ? null : String(qRaw).trim() || null)
+    const sort = typeof input.sort === 'string' && input.sort.trim() ? input.sort.trim() : 'recent'
+    const norm = (v: unknown): string[] => {
+      if (v === undefined || v === null) return []
+      if (Array.isArray(v)) return (v as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+      if (typeof v === 'string') {
+        const t = v.trim()
+        if (!t) return []
+        return t.includes(',') ? t.split(',').map((s) => s.trim()).filter(Boolean) : [t]
+      }
+      return []
+    }
+    const equipmentTypes = norm((input as Record<string, unknown>).equipmentTypes ?? (input as Record<string, unknown>).equipment_type)
+    const gradeEffects = norm((input as Record<string, unknown>).gradeEffects ?? (input as Record<string, unknown>).grade_effect)
+    return { equipmentTypes, gradeEffects, q, sort }
+  }
+
+  async listFavorites(): Promise<MarketplaceFavorite[]> {
+    const rows = await this.favoriteRepo.find({ order: { name: 'ASC' } })
+    return rows.map((r) => this.toFavoriteDto(r))
+  }
+
+  async createFavorite(input: CreateFavoriteInput): Promise<MarketplaceFavorite> {
+    const name = input.name?.trim()
+    if (!name) throw new Error('Favorite name is required')
+    if (name.length > 50) throw new Error('Favorite name max 50 chars')
+    const exists = await this.favoriteRepo.findOne({ where: { name } })
+    if (exists) throw new Error(`Favorite "${name}" already exists`)
+    const { equipmentTypes, gradeEffects, q, sort } = this.normalizeFavoriteArrays(input)
+    const ent = this.favoriteRepo.create({
+      name,
+      q,
+      equipmentTypes,
+      gradeEffects,
+      sort,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    })
+    const saved = await this.favoriteRepo.save(ent)
+    return this.toFavoriteDto(saved)
+  }
+
+  async updateFavorite(id: number, input: UpdateFavoriteInput): Promise<MarketplaceFavorite> {
+    const ent = await this.favoriteRepo.findOne({ where: { id } })
+    if (!ent) throw new Error('Favorite not found')
+    if (input.name !== undefined) {
+      const name = input.name.trim()
+      if (!name) throw new Error('Favorite name is required')
+      if (name.length > 50) throw new Error('Favorite name max 50 chars')
+      const dup = await this.favoriteRepo.findOne({ where: { name } })
+      if (dup && dup.id !== id) throw new Error(`Favorite "${name}" already exists`)
+      ent.name = name
+    }
+    // if any filter fields provided, replace them; allow clearing via empty array / null q
+    const hasFilterKeys = ['q','equipmentTypes','gradeEffects','equipment_type','grade_effect','sort'].some(k=> k in input)
+    if (hasFilterKeys) {
+      const norm = this.normalizeFavoriteArrays(input as CreateFavoriteInput)
+      // only update those explicitly provided? For simplicity replace all if any provided, respecting q null.
+      // Detect which keys were actually in input to avoid wiping when only name changed – already handled.
+      const src = input as Record<string,unknown>
+      if ('q' in src) ent.q = norm.q
+      if ('equipmentTypes' in src || 'equipment_type' in src) ent.equipmentTypes = norm.equipmentTypes
+      if ('gradeEffects' in src || 'grade_effect' in src) ent.gradeEffects = norm.gradeEffects
+      if ('sort' in src) ent.sort = norm.sort
+    }
+    ent.updatedAt = new Date()
+    const saved = await this.favoriteRepo.save(ent)
+    return this.toFavoriteDto(saved)
+  }
+
+  async deleteFavorite(id: number): Promise<void> {
+    const ent = await this.favoriteRepo.findOne({ where: { id } })
+    if (!ent) throw new Error('Favorite not found')
+    await this.favoriteRepo.remove(ent)
+  }
+
+  async getFavorite(id: number): Promise<MarketplaceFavorite | null> {
+    const ent = await this.favoriteRepo.findOne({ where: { id } })
+    return ent ? this.toFavoriteDto(ent) : null
   }
 
   async upsertFromApi(raw: {

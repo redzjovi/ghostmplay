@@ -99,6 +99,35 @@ async function bootstrapNest() {
     if (shouldLog()) console.log('[IPC] → marketplace:gradeEffects')
     return marketplace.getDistinctGradeEffects()
   })
+  ipcMain.handle('favorites:list', async () => {
+    if (shouldLog()) console.log('[IPC] → favorites:list')
+    const res = await marketplace.listFavorites()
+    if (shouldLog()) console.log('[IPC] ← favorites:list', res.length)
+    return res
+  })
+  ipcMain.handle('favorites:create', async (_e, input) => {
+    if (shouldLog()) console.log('[IPC] → favorites:create', JSON.stringify(input))
+    const res = await marketplace.createFavorite(input)
+    if (shouldLog()) console.log('[IPC] ← favorites:create', JSON.stringify(res))
+    return res
+  })
+  ipcMain.handle('favorites:update', async (_e, payload: { id: number; input: unknown }) => {
+    if (shouldLog()) console.log('[IPC] → favorites:update', JSON.stringify(payload))
+    const res = await marketplace.updateFavorite(payload.id, payload.input as never)
+    if (shouldLog()) console.log('[IPC] ← favorites:update', JSON.stringify(res))
+    return res
+  })
+  ipcMain.handle('favorites:delete', async (_e, id: number) => {
+    if (shouldLog()) console.log('[IPC] → favorites:delete', id)
+    await marketplace.deleteFavorite(id)
+    if (shouldLog()) console.log('[IPC] ← favorites:delete ok')
+  })
+  ipcMain.handle('favorites:get', async (_e, id: number) => {
+    if (shouldLog()) console.log('[IPC] → favorites:get', id)
+    const res = await marketplace.getFavorite(id)
+    if (shouldLog()) console.log('[IPC] ← favorites:get', JSON.stringify(res))
+    return res
+  })
   ipcMain.handle('sync:refresh', async (_e, opts) => {
     // opts may be {q, itemName, mode} from renderer; map to scrap
     if (shouldLog()) console.log('[IPC] → sync:refresh', JSON.stringify(opts))

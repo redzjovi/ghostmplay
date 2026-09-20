@@ -25,15 +25,38 @@
       </Button>
     </div>
     <nav class="flex flex-col gap-1 px-2 md:px-3">
-      <router-link
-        to="/"
-        class="flex items-center gap-3 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground md:px-3"
-        :class="{ 'bg-accent text-accent-foreground': isMarketplace }"
-        title="Marketplace"
-      >
-        <Store class="h-4 w-4 shrink-0" />
-        <span v-show="!isCollapsed" class="hidden truncate md:block">Marketplace</span>
-      </router-link>
+      <!-- Marketplace group - always expanded submenu -->
+      <div class="space-y-1">
+        <div
+          class="flex items-center gap-3 rounded-md px-2 py-2 text-sm font-medium md:px-3"
+          :class="isMarketplace ? 'text-foreground' : 'text-muted-foreground'"
+        >
+          <Store class="h-4 w-4 shrink-0" />
+          <span v-show="!isCollapsed" class="hidden truncate md:block">Marketplace</span>
+        </div>
+        <div class="flex flex-col gap-0.5" :class="isCollapsed ? 'items-center' : 'ml-2 md:ml-6 border-l pl-2'">
+          <router-link
+            to="/marketplaces/list"
+            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            :class="isListActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
+            :title="isCollapsed ? 'List' : undefined"
+          >
+            <List class="h-3.5 w-3.5 shrink-0" />
+            <span v-show="!isCollapsed" class="hidden truncate md:block">List</span>
+          </router-link>
+          <router-link
+            to="/marketplaces/favorites"
+            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            :class="isFavoriteActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
+            :title="isCollapsed ? 'Favorite' : undefined"
+          >
+            <Star class="h-3.5 w-3.5 shrink-0" />
+            <span v-show="!isCollapsed" class="hidden truncate md:block">Favorite</span>
+            <Badge v-if="!isCollapsed && favoriteCount>0" variant="secondary" class="ml-auto h-5 min-w-5 px-1 text-[10px] leading-none">{{ favoriteCount }}</Badge>
+          </router-link>
+          <span v-if="isCollapsed && favoriteCount>0" class="mt-0.5 text-[10px] font-medium text-muted-foreground">{{ favoriteCount }}</span>
+        </div>
+      </div>
     </nav>
     <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed ? 'justify-center' : 'justify-between'">
       <ThemeToggle />
@@ -53,14 +76,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft } from 'lucide-vue-next'
+import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { useFavoritesStore } from '@/stores/favorites'
 
 const route = useRoute()
-const isMarketplace = computed(() => route.path === '/' || route.path.startsWith('/items'))
+const isMarketplace = computed(() => route.path === '/' || route.path.startsWith('/marketplaces') || route.path.startsWith('/items'))
+const isFavoriteActive = computed(() => {
+  if (!isMarketplace.value) return false
+  return route.path.startsWith('/marketplaces/favorites')
+})
+const isListActive = computed(() => route.path === '/marketplaces/list' || (isMarketplace.value && !isFavoriteActive.value && !route.path.startsWith('/items')))
+
+const favStore = useFavoritesStore()
+const favoriteCount = computed(() => favStore.favorites.length)
+onMounted(() => {
+  favStore.fetchFavorites().catch(()=>{})
+})
 
 const STORAGE_KEY = 'ghostmplay:sidebar:collapsed'
 const isCollapsed = ref<boolean>(localStorage.getItem(STORAGE_KEY) === '1')

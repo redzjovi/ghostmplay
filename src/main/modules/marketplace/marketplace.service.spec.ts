@@ -52,9 +52,16 @@ function createService(qbMock: QbMock) {
     create: vi.fn((x) => x),
     save: vi.fn(async (x) => x),
   } as unknown as never
+  const favoriteRepo = {
+    find: vi.fn(async () => []),
+    findOne: vi.fn(async () => null),
+    create: vi.fn((x) => x),
+    save: vi.fn(async (x) => ({ ...x, id: 1, createdAt: new Date(), updatedAt: new Date() })),
+    remove: vi.fn(async () => {}),
+  } as unknown as never
 
-  const svc = new MarketplaceService(itemRepo as never, detailRepo as never)
-  return { svc, itemRepo, qbMock }
+  const svc = new MarketplaceService(itemRepo as never, detailRepo as never, favoriteRepo as never)
+  return { svc, itemRepo, qbMock, favoriteRepo }
 }
 
 describe('MarketplaceService.list — equipment_type & grade_effect (column snake, property camel)', () => {

@@ -45,3 +45,35 @@ export interface MarketplaceFilterOptions {
   equipmentTypes: EquipmentType[]
   gradeEffects: GradeEffect[]
 }
+
+export interface MarketplaceFavorite {
+  id: number
+  name: string
+  q?: string | null
+  equipmentTypes: string[]
+  gradeEffects: string[]
+  sort: 'recent' | 'price_asc' | 'price_desc' | string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateFavoriteInput {
+  name: string
+  q?: string | null
+  equipmentTypes?: string[]
+  gradeEffects?: string[]
+  sort?: 'recent' | 'price_asc' | 'price_desc' | string
+  // legacy snake_case aliases accepted by IPC
+  equipment_type?: string | string[]
+  grade_effect?: string | string[]
+}
+
+export interface UpdateFavoriteInput {
+  name?: string
+  q?: string | null
+  equipmentTypes?: string[]
+  gradeEffects?: string[]
+  sort?: string
+  equipment_type?: string | string[]
+  grade_effect?: string | string[]
+}

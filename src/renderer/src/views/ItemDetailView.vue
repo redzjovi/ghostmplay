@@ -191,14 +191,40 @@ import { AspectRatio } from '@/components/ui/aspect-ratio'
 
 const props = defineProps<{ tokenId: string }>()
 const router = useRouter()
+import { useRoute } from 'vue-router'
+const route = useRoute()
 const loading = ref(true)
 const data = ref<unknown>(null)
 const imgError = ref(false)
 const imgLoaded = ref(false)
 
+function decodeBackUrl(encoded: string): string | null {
+  try {
+    const decoded = decodeURIComponent(atob(encoded))
+    // basic safety: must start with / or #/ or /
+    if (decoded.startsWith('/') || decoded.startsWith('#')) return decoded.replace(/^#/, '')
+    return decoded
+  } catch {
+    try { return atob(encoded) } catch { return null }
+  }
+}
 function goBack() {
+  const raw = route.query.back_url as string | undefined
+  if (raw) {
+    const decoded = decodeBackUrl(decodeURIComponent(raw))
+    if (decoded) {
+      router.replace(decoded)
+      return
+    }
+  }
+  // handle legacy ?tab=favorite bookmark without back_url
+  const tab = route.query.tab as string | undefined
+  if (tab === 'favorite') {
+    router.replace('/marketplaces/favorites')
+    return
+  }
   if (window.history.length > 1) router.back()
-  else router.replace('/')
+  else router.replace('/marketplaces/list')
 }
 
 const NUMI_ICON_URL = 'https://market.numine.io/images/market/icon_numi.png'

@@ -3,13 +3,14 @@ import { TypeOrmModule } from '@nestjs/typeorm'
 import { HttpModule } from '@nestjs/axios'
 import { MarketplaceItemEntity } from './entities/marketplace-item.entity'
 import { MarketplaceItemDetailEntity } from './entities/marketplace-item-detail.entity'
+import { MarketplaceFavoriteEntity } from './entities/marketplace-favorite.entity'
 import { MarketplaceService } from './marketplace.service'
 import { GhostMarketplaceClient } from './api/ghost-marketplace.client'
 import { SyncService } from './sync.service'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([MarketplaceItemEntity, MarketplaceItemDetailEntity]),
+    TypeOrmModule.forFeature([MarketplaceItemEntity, MarketplaceItemDetailEntity, MarketplaceFavoriteEntity]),
     HttpModule.register({ timeout: 15000, maxRedirects: 3 })
   ],
   providers: [MarketplaceService, GhostMarketplaceClient, SyncService],
