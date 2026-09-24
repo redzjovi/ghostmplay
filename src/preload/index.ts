@@ -19,6 +19,9 @@ const api = {
   sync: {
     refresh: (opts?: { itemName?: string; q?: string; page?: number; limit?: number; mode?: 'all' | 'latest' }) =>
       ipcRenderer.invoke('sync:refresh', opts) as Promise<{ synced: number }>
+  },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url) as Promise<void>
   }
 }
 

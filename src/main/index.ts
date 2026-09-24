@@ -1,5 +1,5 @@
 import 'reflect-metadata'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join, dirname } from 'path'
 import { mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -136,6 +136,12 @@ async function bootstrapNest() {
     const res = await sync.refresh({ itemName, mode })
     if (shouldLog()) console.log('[IPC] ← sync:refresh', JSON.stringify(res))
     return res
+  })
+  ipcMain.handle('shell:open-external', async (_e, url: string) => {
+    if (typeof url !== 'string' || !/^https:\/\/market\.numine\.io\/games\/GhostM\/nfts\/\d+$/.test(url)) {
+      throw new Error('Blocked external URL')
+    }
+    await shell.openExternal(url)
   })
 }
 

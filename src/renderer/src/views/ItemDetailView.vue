@@ -1,8 +1,13 @@
 <template>
   <div class="max-w-7xl mx-auto p-5 space-y-5">
-    <Button variant="ghost" size="sm" @click="goBack">
-      <ArrowLeft class="mr-2 h-4 w-4" /> Back to Marketplace
-    </Button>
+    <div class="flex items-center justify-between gap-2">
+      <Button variant="ghost" size="sm" @click="goBack">
+        <ArrowLeft class="mr-2 h-4 w-4" /> Back to Marketplace
+      </Button>
+      <Button variant="outline" size="sm" @click="openOriginal">
+        <ExternalLink class="mr-2 h-4 w-4" /> View on Market
+      </Button>
+    </div>
 
     <div v-if="loading" class="space-y-4">
       <Skeleton class="h-8 w-1/3" />
@@ -177,7 +182,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Copy, Shield, Star, ImageOff } from 'lucide-vue-next'
+import { ArrowLeft, Copy, Shield, Star, ImageOff, ExternalLink } from 'lucide-vue-next'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-json'
 import 'prismjs/themes/prism-tomorrow.css'
@@ -228,6 +233,21 @@ function goBack() {
 }
 
 const NUMI_ICON_URL = 'https://market.numine.io/images/market/icon_numi.png'
+const originalUrl = computed(() => {
+  const id = item.value?.tokenId ?? Number(props.tokenId)
+  return `https://market.numine.io/games/GhostM/nfts/${id}`
+})
+async function openOriginal() {
+  const url = originalUrl.value
+  try {
+    const api = (window as unknown as { api?: { shell?: { openExternal?: (url: string) => Promise<void> } } }).api
+    if (api?.shell?.openExternal) {
+      await api.shell.openExternal(url)
+      return
+    }
+  } catch { /* fall through to window.open */ }
+  window.open(url, '_blank', 'noopener')
+}
 function isNUMI(currency?: string | number | null): boolean {
   if (currency == null) return false
   const s = String(currency).trim().toUpperCase()

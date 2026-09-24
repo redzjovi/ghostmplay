@@ -25,5 +25,8 @@ interface Window {
     sync: {
       refresh: (opts?: { itemName?: string; q?: string; mode?: 'all' | 'latest'; page?: number; limit?: number }) => Promise<{ synced: number }>
     }
+    shell: {
+      openExternal: (url: string) => Promise<void>
+    }
   }
 }
