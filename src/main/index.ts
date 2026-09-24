@@ -26,7 +26,7 @@ function createWindow(): void {
     width: 1280,
     height: 800,
     show: false,
-    autoHideMenuBar: true,
+    autoHideMenuBar: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -34,6 +34,8 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+  mainWindow.setAutoHideMenuBar(false)
+  mainWindow.setMenuBarVisibility(true)
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   // Fallback if ready-to-show never fires (GPU/headless)
