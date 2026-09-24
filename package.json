@@ -20,7 +20,9 @@
     "test:coverage": "vitest run --coverage",
     "typeorm": "typeorm",
     "migration:generate": "typeorm migration:generate -d src/main/database/data-source.ts",
-    "migration:run": "typeorm migration:run -d src/main/database/data-source.ts"
+    "migration:run": "typeorm migration:run -d src/main/database/data-source.ts",
+    "docs:db": "tbls doc --force",
+    "docs:db:diff": "tbls diff"
   },
   "dependencies": {
     "@lucide/vue": "^1.47.0",
