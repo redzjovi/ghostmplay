@@ -105,6 +105,15 @@ export class GhostMarketplaceClient {
   }
 
   async detail(tokenId: number, serviceName = 'GhostMGlobal'): Promise<ItemDetailResponse | null> {
+    try {
+      return await this.detailStrict(tokenId, serviceName)
+    } catch {
+      return null
+    }
+  }
+
+  /** Strict variant: throws with `status` so callers can distinguish 400 (claimed) from network errors. */
+  async detailStrict(tokenId: number, serviceName = 'GhostMGlobal'): Promise<ItemDetailResponse> {
     const url = `${this.baseURL}/api/users/nft/item-detail`
     const body = new URLSearchParams({ tokenId: String(tokenId), serviceName }).toString()
     const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
@@ -122,9 +131,55 @@ export class GhostMarketplaceClient {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       this.logger.error(`[API] ✗ POST ${url} tokenId=${tokenId} error=${msg}`)
-      return null
+      throw e
     }
   }
+
+  /** Token transfers history: offset is a 0-based PAGE index (0 = page 1), not an item offset — same convention as search-redis. */
+  async tokenTransfers(opts: { limit?: number; offset?: number } = {}): Promise<TokenTransfersResponse> {
+    const params = { limit: opts.limit ?? 150, offset: opts.offset ?? 0 }
+    const url = `${this.baseURL}/api/users/market/token-transfers`
+    const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
+    if (logApi) this.logger.log(`[API] → GET ${url} params=${JSON.stringify(params)}`)
+    else this.logger.log(`GET ${url} page=${params.offset} limit=${params.limit}`)
+    let data: { message?: string; data?: TokenTransfersResponse } & TokenTransfersResponse
+    try {
+      const res = await firstValueFrom(
+        this.http.get<{ message?: string; data?: TokenTransfersResponse } & TokenTransfersResponse>(url, {
+          headers: this.headers,
+          params,
+          timeout: 15000
+        })
+      )
+      data = res.data
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      this.logger.error(`[API] ✗ GET ${url} params=${JSON.stringify(params)} error=${msg}`)
+      throw e
+    }
+    const unwrapped = (data as { data?: TokenTransfersResponse }).data ?? (data as TokenTransfersResponse)
+    const out = unwrapped as TokenTransfersResponse
+    if (logApi) this.logger.log(`[API] ← GET ${url} count=${String(out.count)} lists=${String(out.lists?.length ?? 0)}`)
+    return { count: Number(out.count ?? 0), lists: out.lists ?? [] }
+  }
+}
+
+export interface TokenTransferItem {
+  token_id: string
+  seller: string
+  buyer: string
+  game_name: string
+  item_name: string
+  price: number
+  currency: string
+  tx_hash: string
+  image_url: string
+  time: string // "2026-09-25 01:45:59"
+}
+
+export interface TokenTransfersResponse {
+  count: number
+  lists: TokenTransferItem[]
 }
 
 export interface ItemDetailResponse {

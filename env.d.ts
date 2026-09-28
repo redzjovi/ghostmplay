@@ -11,6 +11,7 @@ interface Window {
     marketplace: {
       list: (q?: import('./src/shared/types').MarketplaceListQuery) => Promise<{ data: import('./src/shared/types').MarketplaceItem[]; total: number; page: number; limit: number }>
       get: (tokenId: number) => Promise<import('./src/shared/types').MarketplaceItemDetail | null>
+      getLive: (tokenId: number) => Promise<import('./src/shared/types').LiveItemDetailResponse | null>
       filters: () => Promise<{ equipmentTypes: string[]; gradeEffects: string[] }>
       equipmentTypes: () => Promise<string[]>
       gradeEffects: () => Promise<string[]>
@@ -24,6 +25,14 @@ interface Window {
     }
     sync: {
       refresh: (opts?: { itemName?: string; q?: string; mode?: 'all' | 'latest'; page?: number; limit?: number }) => Promise<{ synced: number }>
+    }
+    history: {
+      list: (q?: import('./src/shared/types').HistoryListQuery) => Promise<{ data: import('./src/shared/types').MarketplaceTokenTransfer[]; total: number; page: number; limit: number }>
+      sync: (opts?: { mode?: 'full' | 'latest'; limit?: number }) => Promise<{ synced: number; total: number; enriched: number; claimed: number }>
+      filters: () => Promise<{ gameNames: string[]; sellerNames: string[]; buyerNames: string[] }>
+      gameNames: () => Promise<string[]>
+      sellerNames: () => Promise<string[]>
+      buyerNames: () => Promise<string[]>
     }
     shell: {
       openExternal: (url: string) => Promise<void>

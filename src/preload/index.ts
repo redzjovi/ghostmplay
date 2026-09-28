@@ -1,13 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { MarketplaceListQuery, MarketplaceFavorite, CreateFavoriteInput, UpdateFavoriteInput } from '../shared/types'
+import type { MarketplaceListQuery, MarketplaceFavorite, CreateFavoriteInput, UpdateFavoriteInput, HistoryListQuery, LiveItemDetailResponse } from '../shared/types'
 
 const api = {
   marketplace: {
     list: (query?: MarketplaceListQuery) => ipcRenderer.invoke('marketplace:list', query) as Promise<{ data: unknown[]; total: number; page: number; limit: number }>,
     get: (tokenId: number) => ipcRenderer.invoke('marketplace:get', tokenId) as Promise<unknown>,
+    getLive: (tokenId: number) => ipcRenderer.invoke('marketplace:get-live', tokenId) as Promise<LiveItemDetailResponse | null>,
     filters: () => ipcRenderer.invoke('marketplace:filters') as Promise<{ equipmentTypes: string[]; gradeEffects: string[] }>,
     equipmentTypes: () => ipcRenderer.invoke('marketplace:equipmentTypes') as Promise<string[]>,
     gradeEffects: () => ipcRenderer.invoke('marketplace:gradeEffects') as Promise<string[]>
+  },
+  history: {
+    list: (query?: HistoryListQuery) => ipcRenderer.invoke('history:list', query) as Promise<{ data: unknown[]; total: number; page: number; limit: number }>,
+    sync: (opts?: { mode?: 'full' | 'latest'; limit?: number }) =>
+      ipcRenderer.invoke('history:sync', opts) as Promise<{ synced: number; total: number; enriched: number; claimed: number }>,
+    filters: () => ipcRenderer.invoke('history:filters') as Promise<{ gameNames: string[]; sellerNames: string[]; buyerNames: string[] }>,
+    gameNames: () => ipcRenderer.invoke('history:gameNames') as Promise<string[]>,
+    sellerNames: () => ipcRenderer.invoke('history:sellerNames') as Promise<string[]>,
+    buyerNames: () => ipcRenderer.invoke('history:buyerNames') as Promise<string[]>
   },
   favorites: {
     list: () => ipcRenderer.invoke('favorites:list') as Promise<MarketplaceFavorite[]>,

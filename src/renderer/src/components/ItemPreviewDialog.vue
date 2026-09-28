@@ -41,6 +41,7 @@
               <div class="flex flex-wrap items-center gap-2">
                 <Badge variant="secondary" class="gap-1"><Shield class="h-3 w-3" />{{ equipmentType || '-' }}</Badge>
                 <Badge variant="outline">Token #{{ tokenId }}</Badge>
+                <Badge v-if="isLive" variant="secondary" class="text-[11px]" title="Fetched live from market API, not stored locally">Live</Badge>
               </div>
               <div class="text-sm">
                 <div class="text-xs text-muted-foreground">Name</div>
@@ -132,7 +133,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
-import { normalizeImageUrl, styleFor, dotColor, isSimpleValues, simpleValues, parseDetail } from '@/lib/itemDetailHelpers'
+import { normalizeImageUrl, styleFor, dotColor, isSimpleValues, simpleValues, parseDetail, adaptLiveDetail } from '@/lib/itemDetailHelpers'
 
 const props = defineProps<{ tokenId: number | null; open: boolean; fallbackItem?: { name?: string; imageUrl?: string; equipmentType?: string } | null }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>()
@@ -141,7 +142,9 @@ const router = useRouter()
 const loading = ref(false)
 const raw = ref<unknown>(null)
 const imgError = ref(false)
+const isLive = ref(false)
 const cache = new Map<number, unknown>()
+const liveIds = new Set<number>()
 
 const hasData = computed(() => {
   const d = raw.value as { item?: unknown } | null
@@ -186,30 +189,48 @@ const gradeSection = computed(() => datas.value.find(d => d.title.toLowerCase().
 const basicEntries = computed(() => basicSection.value ? simpleValues(basicSection.value as { title: string; values: unknown[] }) : [])
 const gradeEntries = computed(() => gradeSection.value ? simpleValues(gradeSection.value as { title: string; values: unknown[] }) : [])
 
-watch(() => props.open, async (open) => {
-  if (!open || props.tokenId == null) return
+async function fetchDetail(id: number) {
   imgError.value = false
-  const cached = cache.get(props.tokenId)
-  if (cached) { raw.value = cached; return }
+  isLive.value = false
+  if (cache.has(id)) {
+    raw.value = cache.get(id)!
+    isLive.value = liveIds.has(id)
+    return
+  }
   loading.value = true
   try {
-    const res = await window.api.marketplace.get(Number(props.tokenId))
-    raw.value = res
-    if (res) cache.set(props.tokenId, res)
+    const res = await window.api.marketplace.get(id)
+    if (res) {
+      raw.value = res
+      cache.set(id, res)
+      return
+    }
+    // Local miss → display-only live fetch (never persisted).
+    const live = await window.api.marketplace.getLive(id).catch(() => null)
+    const adapted = adaptLiveDetail(live as never, props.fallbackItem?.name ?? '')
+    if (adapted) {
+      raw.value = adapted
+      cache.set(id, adapted)
+      liveIds.add(id)
+      isLive.value = true
+    } else {
+      raw.value = null
+    }
   } catch {
     raw.value = null
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(() => props.open, async (open) => {
+  if (!open || props.tokenId == null) return
+  await fetchDetail(Number(props.tokenId))
 })
 
 watch(() => props.tokenId, async (id) => {
   if (!props.open || id == null) return
-  if (cache.has(id)) { raw.value = cache.get(id)!; return }
-  loading.value = true
-  try {
-    const res = await window.api.marketplace.get(Number(id))
-    raw.value = res
-    if (res) cache.set(id, res)
-  } catch { raw.value = null } finally { loading.value = false }
+  await fetchDetail(Number(id))
 })
 
 function goFull() {

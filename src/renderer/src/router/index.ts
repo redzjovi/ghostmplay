@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/marketplace', redirect: '/marketplaces/list' },
     { path: '/marketplaces/list', component: () => import('../views/MarketplaceView.vue') },
     { path: '/marketplaces/favorites', component: () => import('../views/MarketplaceView.vue') },
+    { path: '/history/list', component: () => import('../views/HistoryView.vue') },
     { path: '/items/:tokenId', component: () => import('../views/ItemDetailView.vue'), props: true }
   ]
 })

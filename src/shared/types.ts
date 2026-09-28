@@ -77,3 +77,79 @@ export interface UpdateFavoriteInput {
   equipment_type?: string | string[]
   grade_effect?: string | string[]
 }
+
+export interface User {
+  id: string
+  username: string | null
+}
+
+export interface MarketplaceTokenTransfer {
+  id: number
+  tokenId: number
+  gameName: string | null
+  sellerId: string
+  sellerUsername?: string | null
+  buyerId: string
+  buyerUsername?: string | null
+  itemName: string
+  price: number
+  currency: string
+  txHash: string
+  imageUrl: string | null
+  createdAt: string // ISO
+  claimed: boolean
+}
+
+export interface HistoryListQuery {
+  page?: number
+  limit?: number
+  seller?: string
+  buyer?: string
+  sellerName?: string
+  buyerName?: string
+  tokenId?: number | string
+  txHash?: string
+  itemName?: string
+  /** alias for itemName */
+  q?: string
+  priceMin?: number
+  priceMax?: number
+  createdFrom?: string // YYYY-MM-DD (UTC day, inclusive)
+  createdTo?: string // YYYY-MM-DD (UTC day, inclusive)
+  claimed?: boolean
+  sort?: 'recent' | 'created_at_desc' | 'created_at_asc' | 'price_asc' | 'price_desc'
+}
+
+/** Raw live item-detail response (display-only, never persisted). */
+export interface LiveItemDetailResponse {
+  tokenId: number
+  owner?: string | null
+  ownerName?: string | null
+  price?: number | null
+  ipfs?: string | null
+  details?: {
+    name?: string | null
+    image?: string | null
+    attributes?: { trait_type?: string | null; value?: unknown }[] | null
+  } | null
+  viewData?: {
+    datas?: { title?: string | null; values?: unknown[] }[] | null
+  } | null
+}
+
+/** Dialog-ready shape adapted from a live response (mirrors marketplace:get). */
+export interface AdaptedLiveDetail {
+  item: {
+    tokenId: number
+    name: string
+    imageUrl: string
+    equipmentType: string
+    price: number
+    currency: string
+    sold: boolean
+  }
+  detail: {
+    attributes: { trait_type: string; value: string }[]
+    datas: { title: string; values: unknown[] }[]
+  }
+}

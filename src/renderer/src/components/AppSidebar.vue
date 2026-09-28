@@ -57,6 +57,27 @@
           <span v-if="isCollapsed && favoriteCount>0" class="mt-0.5 text-[10px] font-medium text-muted-foreground">{{ favoriteCount }}</span>
         </div>
       </div>
+      <!-- History group -->
+      <div class="space-y-1 pt-2">
+        <div
+          class="flex items-center gap-3 rounded-md px-2 py-2 text-sm font-medium md:px-3"
+          :class="isHistory ? 'text-foreground' : 'text-muted-foreground'"
+        >
+          <History class="h-4 w-4 shrink-0" />
+          <span v-show="!isCollapsed" class="hidden truncate md:block">History</span>
+        </div>
+        <div class="flex flex-col gap-0.5" :class="isCollapsed ? 'items-center' : 'ml-2 md:ml-6 border-l pl-2'">
+          <router-link
+            to="/history/list"
+            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+            :class="isHistoryListActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
+            :title="isCollapsed ? 'List' : undefined"
+          >
+            <List class="h-3.5 w-3.5 shrink-0" />
+            <span v-show="!isCollapsed" class="hidden truncate md:block">List</span>
+          </router-link>
+        </div>
+      </div>
     </nav>
     <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed ? 'justify-center' : 'justify-between'">
       <ThemeToggle />
@@ -78,7 +99,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star } from 'lucide-vue-next'
+import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star, History } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -86,6 +107,8 @@ import { useFavoritesStore } from '@/stores/favorites'
 
 const route = useRoute()
 const isMarketplace = computed(() => route.path === '/' || route.path.startsWith('/marketplaces') || route.path.startsWith('/items'))
+const isHistory = computed(() => route.path.startsWith('/history'))
+const isHistoryListActive = computed(() => route.path === '/history/list' || (isHistory.value && !route.path.startsWith('/items')))
 const isFavoriteActive = computed(() => {
   if (!isMarketplace.value) return false
   return route.path.startsWith('/marketplaces/favorites')

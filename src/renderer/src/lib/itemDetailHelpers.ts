@@ -43,8 +43,7 @@ export function simpleValues(section: { title: string; values: unknown[] }): { k
   return out
 }
 
-export function orderIndex(title: string): number {
-  const t = title.toLowerCase()
+export function orderIndex(title: string): number {  const t = title.toLowerCase()
   if (t.includes('basic effect')) return 0
   if (t.includes('spirit synthesis') || t.includes('gem effect')) return 1
   if (t.includes('grade effect')) return 2
@@ -58,8 +57,7 @@ export type ParsedDetail = {
   datas: { title: string; class?: string; values: unknown[] }[]
 }
 
-export function parseDetail(detail: { attributes: unknown; datas: unknown } | null): ParsedDetail {
-  const attributes: { type: string; value: string }[] = (() => {
+export function parseDetail(detail: { attributes: unknown; datas: unknown } | null): ParsedDetail {  const attributes: { type: string; value: string }[] = (() => {
     const a = detail?.attributes
     if (!Array.isArray(a)) return []
     return (a as Record<string, unknown>[]).map(x => ({ type: String((x as Record<string, unknown>).trait_type ?? (x as Record<string, unknown>).type ?? ''), value: String((x as Record<string, unknown>).value ?? '') })).filter(x => x.type)
@@ -70,4 +68,75 @@ export function parseDetail(detail: { attributes: unknown; datas: unknown } | nu
     return (d as { title: string; class?: string; values: unknown[] }[]).map(x => ({ title: String(x.title ?? ''), class: String((x as Record<string, unknown>).class ?? ''), values: Array.isArray(x.values) ? x.values : [] })).filter(x => x.title)
   })()
   return { attributes, datas }
+}
+
+export type LiveDetailInput = {
+  tokenId?: unknown
+  price?: unknown
+  details?: {
+    name?: unknown
+    image?: unknown
+    attributes?: unknown
+  } | null
+  viewData?: {
+    datas?: unknown
+  } | null
+} | null | undefined
+
+export type AdaptedLiveDetail = {
+  item: {
+    tokenId: number
+    name: string
+    imageUrl: string
+    equipmentType: string
+    price: number
+    currency: string
+    sold: boolean
+  }
+  detail: {
+    attributes: { trait_type: string; value: string }[]
+    datas: { title: string; values: unknown[] }[]
+  }
+}
+
+/** Adapt a raw live item-detail response into the dialog-ready {item, detail} shape. Never throws. */
+export function adaptLiveDetail(raw: LiveDetailInput, fallbackName = ''): AdaptedLiveDetail | null {
+  if (!raw || typeof raw !== 'object') return null
+  const tokenId = Number((raw as Record<string, unknown>).tokenId)
+  if (!Number.isFinite(tokenId)) return null
+  const details = ((raw as Record<string, unknown>).details ?? {}) as Record<string, unknown>
+  const viewData = ((raw as Record<string, unknown>).viewData ?? {}) as Record<string, unknown>
+  const nameRaw = details.name
+  const name = typeof nameRaw === 'string' && nameRaw.trim() ? nameRaw.trim() : fallbackName
+  const imageRaw = details.image
+  const imageUrl = typeof imageRaw === 'string' ? imageRaw.trim() : ''
+  const attrsRaw = Array.isArray(details.attributes) ? (details.attributes as Record<string, unknown>[]) : []
+  const attributes = attrsRaw
+    .map((a) => ({
+      trait_type: String(a?.trait_type ?? ''),
+      value: String(a?.value ?? '')
+    }))
+    .filter((a) => a.trait_type)
+  const equipmentType =
+    attributes.find((a) => a.trait_type.trim().toLowerCase() === 'equipment type')?.value ?? ''
+  const datasRaw = Array.isArray(viewData.datas) ? (viewData.datas as Record<string, unknown>[]) : []
+  const datas = datasRaw
+    .map((d) => ({
+      title: String(d?.title ?? ''),
+      values: Array.isArray(d?.values) ? (d.values as unknown[]) : []
+    }))
+    .filter((d) => d.title)
+  const priceRaw = Number((raw as Record<string, unknown>).price)
+  return {
+    item: {
+      tokenId,
+      name,
+      imageUrl,
+      equipmentType,
+      price: Number.isFinite(priceRaw) ? priceRaw : 0,
+      currency: 'NUMI',
+      sold: false
+    },
+    detail: { attributes, datas }
+  }
 }

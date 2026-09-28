@@ -5,6 +5,8 @@ import { MarketplaceModule } from './modules/marketplace/marketplace.module'
 import { MarketplaceItemEntity } from './modules/marketplace/entities/marketplace-item.entity'
 import { MarketplaceItemDetailEntity } from './modules/marketplace/entities/marketplace-item-detail.entity'
 import { MarketplaceFavoriteEntity } from './modules/marketplace/entities/marketplace-favorite.entity'
+import { UserEntity } from './modules/marketplace/entities/user.entity'
+import { MarketplaceTokenTransferEntity } from './modules/marketplace/entities/marketplace-token-transfer.entity'
 
 @Module({
   imports: [
@@ -15,7 +17,7 @@ import { MarketplaceFavoriteEntity } from './modules/marketplace/entities/market
       // sql.js uses WASM, no native, avoids GLIBC_2.38 / ABI mismatch on Linux
       location: process.env.GHOSTMPLAY_DB ?? 'ghostmplay.db',
       autoSave: true,
-      entities: [MarketplaceItemEntity, MarketplaceItemDetailEntity, MarketplaceFavoriteEntity],
+      entities: [MarketplaceItemEntity, MarketplaceItemDetailEntity, MarketplaceFavoriteEntity, UserEntity, MarketplaceTokenTransferEntity],
       synchronize: true, // dev auto-create; for prod use migrations (synchronize:false + migrationRun)
       logging: process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1' ? ['query', 'error', 'warn'] : ['error', 'warn']
     }),

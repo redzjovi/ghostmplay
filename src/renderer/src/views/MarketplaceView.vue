@@ -2,10 +2,16 @@
   <div class="p-5 space-y-3">
     <div class="flex items-center justify-between gap-3">
       <h2 class="text-2xl font-semibold">Marketplace</h2>
-      <Button :disabled="syncing" @click="triggerAutoSync('all', true)">
-        <Loader2 v-if="syncing && syncMode==='all'" class="mr-2 h-4 w-4 animate-spin" />
-        {{ syncing && syncMode==='all' ? 'Syncing All…' : 'Sync All' }}
-      </Button>
+      <div class="flex gap-2">
+        <Button variant="outline" :disabled="syncing" @click="triggerSync('latest')">
+          <Loader2 v-if="syncing && syncMode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
+          {{ syncing && syncMode==='latest' ? 'Syncing…' : 'Sync Latest' }}
+        </Button>
+        <Button :disabled="syncing" @click="triggerSync('all')">
+          <Loader2 v-if="syncing && syncMode==='all'" class="mr-2 h-4 w-4 animate-spin" />
+          {{ syncing && syncMode==='all' ? 'Syncing Full…' : 'Sync Full' }}
+        </Button>
+      </div>
     </div>
 
     <!-- Browse view (menu List) -->
@@ -19,7 +25,7 @@
                 <PopoverTrigger as-child>
                   <Button variant="outline" class="justify-between w-full max-w-[220px] overflow-hidden" :title="equipmentTypeFullTitle"><span class="truncate text-left flex-1">{{ equipmentTypeLabel }}</span> <ChevronDown class="ml-2 h-4 w-4 opacity-50 shrink-0" /></Button>
                 </PopoverTrigger>
-                <PopoverContent class="w-64 p-0">
+                <PopoverContent class="w-64 p-0" align="start">
                   <Command>
                     <CommandInput placeholder="Search ..." />
                     <CommandList>
@@ -43,7 +49,7 @@
                 <PopoverTrigger as-child>
                   <Button variant="outline" class="justify-between w-full max-w-[200px] overflow-hidden" :title="gradeEffectFullTitle"><span class="truncate text-left flex-1">{{ gradeEffectLabel }}</span> <ChevronDown class="ml-2 h-4 w-4 opacity-50 shrink-0" /></Button>
                 </PopoverTrigger>
-                <PopoverContent class="w-56 p-0">
+                <PopoverContent class="w-56 p-0" align="start">
                   <Command>
                     <CommandInput placeholder="Search ..." />
                     <CommandList>
@@ -114,8 +120,8 @@
           </ToggleGroup>
         </div>
 
-        <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncMode }} (sort=created_at_desc, limit 12{{ syncMode==='latest' ? ', break on id+created_at' : '' }})…</div>
-        <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="lastSynced!==null"> · Last sync ({{ lastMode }}): {{ lastSynced }} new</span> · Page {{ page }}/{{ totalPages }}</p>
+        <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncModeLabel(syncMode) }} (sort=created_at_desc, limit 12{{ syncMode==='latest' ? ', break on id+created_at' : '' }})…</div>
+        <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="lastSynced!==null"> · Last sync ({{ syncModeLabel(lastMode) }}): {{ lastSynced }} new</span> · Page {{ page }}/{{ totalPages }}</p>
 
         <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
           <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
@@ -187,7 +193,7 @@
                   <PopoverTrigger as-child>
                     <Button variant="outline" class="justify-between w-full max-w-[220px] overflow-hidden" :title="equipmentTypeFullTitle"><span class="truncate text-left flex-1">{{ equipmentTypeLabel }}</span> <ChevronDown class="ml-2 h-4 w-4 opacity-50 shrink-0" /></Button>
                   </PopoverTrigger>
-                  <PopoverContent class="w-64 p-0">
+                  <PopoverContent class="w-64 p-0" align="start">
                     <Command>
                       <CommandInput placeholder="Search ..." />
                       <CommandList>
@@ -211,7 +217,7 @@
                   <PopoverTrigger as-child>
                     <Button variant="outline" class="justify-between w-full max-w-[200px] overflow-hidden" :title="gradeEffectFullTitle"><span class="truncate text-left flex-1">{{ gradeEffectLabel }}</span> <ChevronDown class="ml-2 h-4 w-4 opacity-50 shrink-0" /></Button>
                   </PopoverTrigger>
-                  <PopoverContent class="w-56 p-0">
+                  <PopoverContent class="w-56 p-0" align="start">
                     <Command>
                       <CommandInput placeholder="Search ..." />
                       <CommandList>
@@ -284,7 +290,7 @@
             </ToggleGroup>
           </div>
 
-          <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncMode }} …</div>
+          <div v-if="syncing" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncModeLabel(syncMode) }} …</div>
           <div class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }} · Page {{ page }}/{{ totalPages }}</div>
           <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
             <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
@@ -389,7 +395,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Search, LayoutGrid, List, ChevronDown, X, Loader2, Check, Eye, Star, ArrowLeft, Pencil, Trash2, Save } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -654,14 +660,8 @@ async function load(p = page.value) {
     limit: limit.value,
   })
 }
-async function triggerAutoSync(mode: 'all' | 'latest' = 'latest', force = false) {
+async function triggerSync(mode: 'all' | 'latest' = 'latest') {
   if (syncing.value) return
-  const AUTO_KEY = 'ghostmplay:marketplace:lastAutoSync'
-  const MIN_INTERVAL = 60_000
-  if (!force) {
-    const last = Number(localStorage.getItem(AUTO_KEY) || 0)
-    if (Date.now() - last < MIN_INTERVAL) return
-  }
   if (!navigator.onLine) return
   syncing.value = true
   syncMode.value = mode
@@ -674,18 +674,12 @@ async function triggerAutoSync(mode: 'all' | 'latest' = 'latest', force = false)
       pruneSelections()
       await load(page.value)
     }
-    localStorage.setItem(AUTO_KEY, String(Date.now()))
-  } catch (e) { console.error('auto sync failed', e) } finally { syncing.value = false }
+  } catch (e) { console.error('sync failed', e) } finally { syncing.value = false }
 }
-watch(() => route.path, (to) => { if (to === '/marketplaces/list' || to === '/marketplaces/favorites') triggerAutoSync('latest') })
-function onKeydown(e: KeyboardEvent) {
-  const isR = e.code === 'KeyR' || e.key.toLowerCase() === 'r'
-  const isF5 = e.code === 'F5' || e.key === 'F5'
-  if ((isR && (e.ctrlKey || e.metaKey)) || isF5) {
-    if (!route.path.startsWith('/marketplaces')) return
-    e.preventDefault()
-    triggerAutoSync('latest', true)
-  }
+function syncModeLabel(mode: 'all' | 'latest' | null): string {
+  if (mode === 'all') return 'Full'
+  if (mode === 'latest') return 'Latest'
+  return ''
 }
 function pruneSelections() {
   const validTypes = new Set(store.equipmentTypes)
@@ -814,8 +808,5 @@ onMounted(async () => {
     await load()
   }
   pruneSelections()
-  triggerAutoSync('latest')
-  window.addEventListener('keydown', onKeydown)
 })
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>

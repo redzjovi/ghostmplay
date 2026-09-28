@@ -7,6 +7,9 @@ import { NestFactory } from '@nestjs/core'
 import { AppModule } from './app.module'
 import { MarketplaceService } from './modules/marketplace/marketplace.service'
 import { SyncService } from './modules/marketplace/sync.service'
+import { HistoryService } from './modules/marketplace/history.service'
+import { HistorySyncService } from './modules/marketplace/history-sync.service'
+import { GhostMarketplaceClient } from './modules/marketplace/api/ghost-marketplace.client'
 
 // Disable hardware acceleration for Linux headless / VM (fixes GPU process isn't usable)
 app.disableHardwareAcceleration()
@@ -72,6 +75,9 @@ async function bootstrapNest() {
 
   const marketplace = nestApp.get(MarketplaceService)
   const sync = nestApp.get(SyncService)
+  const history = nestApp.get(HistoryService)
+  const historySync = nestApp.get(HistorySyncService)
+  const marketClient = nestApp.get(GhostMarketplaceClient)
 
   const shouldLog = () => process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
 
@@ -85,6 +91,13 @@ async function bootstrapNest() {
     if (shouldLog()) console.log('[IPC] → marketplace:get', tokenId)
     const res = await marketplace.getByTokenId(tokenId)
     if (shouldLog()) console.log('[IPC] ← marketplace:get', res ? 'found' : 'null')
+    return res
+  })
+  ipcMain.handle('marketplace:get-live', async (_e, tokenId: number) => {
+    if (shouldLog()) console.log('[IPC] → marketplace:get-live', tokenId)
+    // Display-only live fetch: raw API response, never persisted.
+    const res = await marketClient.detail(Number(tokenId)).catch(() => null)
+    if (shouldLog()) console.log('[IPC] ← marketplace:get-live', res ? 'found' : 'null')
     return res
   })
   ipcMain.handle('marketplace:filters', async () => {
@@ -138,6 +151,38 @@ async function bootstrapNest() {
     const res = await sync.refresh({ itemName, mode })
     if (shouldLog()) console.log('[IPC] ← sync:refresh', JSON.stringify(res))
     return res
+  })
+  ipcMain.handle('history:list', async (_e, query) => {
+    if (shouldLog()) console.log('[IPC] → history:list', JSON.stringify(query))
+    const res = await history.list(query)
+    if (shouldLog()) console.log('[IPC] ← history:list', `total=${res.total} returned=${(res.data as unknown[]).length}`)
+    return res
+  })
+  ipcMain.handle('history:sync', async (_e, opts) => {
+    if (shouldLog()) console.log('[IPC] → history:sync', JSON.stringify(opts))
+    const mode = (opts as { mode?: 'full' | 'latest' })?.mode ?? 'latest'
+    const limit = (opts as { limit?: number })?.limit ?? 150
+    const res = mode === 'full' ? await historySync.backfill({ limit }) : await historySync.refreshLatest({ limit })
+    if (shouldLog()) console.log('[IPC] ← history:sync', JSON.stringify(res))
+    return res
+  })
+  ipcMain.handle('history:filters', async () => {
+    if (shouldLog()) console.log('[IPC] → history:filters')
+    const res = await history.getDistinctHistoryFilters()
+    if (shouldLog()) console.log('[IPC] ← history:filters', JSON.stringify(res))
+    return res
+  })
+  ipcMain.handle('history:gameNames', async () => {
+    if (shouldLog()) console.log('[IPC] → history:gameNames')
+    return history.getDistinctGameNames()
+  })
+  ipcMain.handle('history:sellerNames', async () => {
+    if (shouldLog()) console.log('[IPC] → history:sellerNames')
+    return history.getDistinctSellerNames()
+  })
+  ipcMain.handle('history:buyerNames', async () => {
+    if (shouldLog()) console.log('[IPC] → history:buyerNames')
+    return history.getDistinctBuyerNames()
   })
   ipcMain.handle('shell:open-external', async (_e, url: string) => {
     if (typeof url !== 'string' || !/^https:\/\/market\.numine\.io\/games\/GhostM\/nfts\/\d+$/.test(url)) {
