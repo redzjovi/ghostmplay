@@ -98,6 +98,21 @@
             <LogOut class="h-4 w-4" />
           </Button>
         </template>
+        <!-- Browsing is public, so a guest needs a way in; `next` brings them back here.
+             The label hides when collapsed, matching the rest of the sidebar, but the
+             button itself must stay — otherwise a collapsed guest cannot sign in. -->
+        <Button
+          v-else
+          variant="outline"
+          size="sm"
+          class="h-7 shrink-0 gap-1.5 px-2 text-xs"
+          title="Sign in"
+          aria-label="Sign in"
+          @click="signIn"
+        >
+          <LogIn class="h-4 w-4" />
+          <span v-show="!isCollapsed">Sign in</span>
+        </Button>
       </div>
       <Button
         v-show="!isCollapsed"
@@ -117,7 +132,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star, History, LogOut } from 'lucide-vue-next'
+import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star, History, LogIn, LogOut } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -147,6 +162,10 @@ async function signOut() {
   await auth.logout()
   favStore.favorites = []
   await router.push({ name: 'login' })
+}
+
+function signIn() {
+  return router.push({ name: 'login', query: { next: route.fullPath } })
 }
 
 const STORAGE_KEY = 'ghostmplay:sidebar:collapsed'

@@ -5,13 +5,13 @@
       <div class="flex items-center gap-2">
         <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
         <template v-if="sync.isAdmin">
-          <Button variant="outline" :disabled="sync.isBusy || sync.loading" @click="triggerSync('latest')">
-            <Loader2 v-if="sync.isBusy && sync.active?.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ sync.isBusy && sync.active?.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
+          <Button variant="outline" :disabled="hist.running || sync.loading" @click="triggerSync('latest')">
+            <Loader2 v-if="hist.running && hist.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
+            {{ hist.running && hist.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
           </Button>
-          <Button :disabled="sync.isBusy || sync.loading" @click="triggerSync('full')">
-            <Loader2 v-if="sync.isBusy && sync.active?.mode==='full'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ sync.isBusy && sync.active?.mode==='full' ? 'Queued' : 'Sync Full' }}
+          <Button :disabled="hist.running || sync.loading" @click="triggerSync('full')">
+            <Loader2 v-if="hist.running && hist.mode==='full'" class="mr-2 h-4 w-4 animate-spin" />
+            {{ hist.running && hist.mode==='full' ? 'Syncing…' : 'Sync Full' }}
           </Button>
         </template>
       </div>
@@ -188,7 +188,7 @@
             <td colspan="5" class="px-3 py-8 text-center text-muted-foreground"><Loader2 class="mx-auto mb-2 h-6 w-6 animate-spin" /> Loading…</td>
           </tr>
           <tr v-else-if="!(store.items as Row[]).length">
-            <td colspan="5" class="px-3 py-8 text-center text-muted-foreground">No transfers yet. Run Sync Full.</td>
+            <td colspan="5" class="px-3 py-8 text-center text-muted-foreground">{{ sync.isAdmin ? 'No transfers yet. Run Sync Full.' : 'No transfers synced yet.' }}</td>
           </tr>
           <tr v-for="t in (store.items as Row[])" :key="t.id" class="border-t hover:bg-muted/30">
             <td class="px-3 py-2">
@@ -342,8 +342,11 @@ const PAGE_SIZES = [15, 30, 60, 100]
 const storedLimit = Number(route.query.limit ?? localStorage.getItem('ghostmplay:history:limit') ?? 15)
 const limit = ref(PAGE_SIZES.includes(Number.isFinite(storedLimit) ? storedLimit : 15) ? (Number.isFinite(storedLimit) ? storedLimit : 15) : 15)
 
-// Sync is queued server-side and admin-only; see stores/sync.ts.
+// Sync runs in the background server-side and is admin-only; see stores/sync.ts.
+// Only this page's kind is bound here, so a marketplace sync neither disables these
+// buttons nor reports its item count as history's.
 const sync = useSyncStore()
+const hist = computed(() => sync.forKind('history'))
 const lastSynced = ref<number|null>(null)
 const lastMode = ref<string|null>(null)
 const lastEnriched = ref<number|null>(null)
@@ -441,7 +444,7 @@ function clearFilters() {
 }
 
 async function triggerSync(mode: 'full'|'latest') {
-  if (sync.isBusy) return
+  if (hist.value.running) return
   try {
     await sync.enqueue({ kind: 'history', mode })
     watchForSyncResult(mode)
@@ -450,19 +453,21 @@ async function triggerSync(mode: 'full'|'latest') {
   }
 }
 
-/** Waits for the queued job to finish, then refreshes the visible data. */
+/** Waits for the run to finish, then refreshes the visible data. */
 function watchForSyncResult(mode: 'full'|'latest') {
   const startedAt = Date.now()
   const timer = setInterval(async () => {
     await sync.refresh()
-    const done = sync.status?.lastCompleted
-    const finished = done ? Date.parse(done.finishedAt) : 0
-    // Stop when the job reports done, or after a hard ceiling.
-    if ((!sync.isBusy && finished >= startedAt) || Date.now() - startedAt > 10 * 60 * 1000) {
+    const kind = hist.value
+    const finished = kind.lastFinishedAt ? Date.parse(kind.lastFinishedAt) : 0
+    // Stop when this kind reports done, or after a hard ceiling.
+    if ((!kind.running && finished >= startedAt) || Date.now() - startedAt > 10 * 60 * 1000) {
       clearInterval(timer)
+      // Only adopt the numbers if this row's run finished after we asked for it,
+      // so a stale timestamp from a previous sync is not reported as fresh.
       if (finished >= startedAt) {
-        const stats = sync.status?.lastCompleted?.stats ?? null
-        lastSynced.value = typeof stats?.synced === 'number' ? stats.synced : sync.lastSyncedCount
+        const stats = kind.lastStats
+        lastSynced.value = kind.lastSynced
         lastMode.value = mode
         lastEnriched.value = typeof stats?.enriched === 'number' ? stats.enriched : null
         lastClaimed.value = typeof stats?.claimed === 'number' ? stats.claimed : null
@@ -493,9 +498,9 @@ watch(limit, () => {
 })
 
 const lastSyncedLabel = computed(() => {
-  const at = sync.lastSyncedAt
+  const at = hist.value.lastFinishedAt
   if (!at) return 'Not synced yet'
-  const n = sync.lastSyncedCount
+  const n = hist.value.lastSynced
   return `Last sync: ${new Date(at).toLocaleString()}${n === null ? '' : ` · ${n} new`}`
 })
 

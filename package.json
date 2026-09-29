@@ -14,6 +14,7 @@
     "db:up": "bash scripts/dev-services.sh up",
     "db:down": "bash scripts/dev-services.sh down",
     "db:reset": "bash scripts/dev-services.sh reset",
+    "db:nuke": "bash scripts/dev-services.sh nuke",
     "db:status": "bash scripts/dev-services.sh status",
     "db:logs": "bash scripts/dev-services.sh logs",
     "build": "pnpm -r --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/web build && pnpm --filter @ghostmplay/api build",

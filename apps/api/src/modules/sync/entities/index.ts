@@ -1,2 +1,2 @@
-export { SyncJobEntity } from './sync-job.entity'
-export type { SyncJobKind, SyncJobStatus, SyncJobTrigger } from './sync-job.entity'
+export { SyncStateEntity, SYNC_KINDS } from './sync-state.entity'
+export type { SyncKind, SyncMode, SyncStatus } from './sync-state.entity'

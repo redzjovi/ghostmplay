@@ -62,4 +62,29 @@ export class LockService {
       return { release: async () => void this.local.delete(key) }
     }
   }
+
+  /**
+   * Deletes a lock regardless of who holds it.
+   *
+   * Only safe at boot, and only because this app runs as a single process: a lock
+   * still present when the process starts was set by a process that is now gone,
+   * and its `release` can never run. Without this, a deploy that kills a sync
+   * mid-flight leaves the lock behind for its full TTL, and every trigger after it
+   * dedupes against a run that no longer exists — sync silently stops until the TTL
+   * expires. The token check in `release` is deliberately bypassed because by
+   * definition the token is lost.
+   */
+  async forceRelease(key: string): Promise<boolean> {
+    this.local.delete(key)
+    const client = this.redis.raw
+    if (!client) return false
+    try {
+      const deleted = await client.del(`lock:${key}`)
+      if (deleted) this.logger.warn(`Released orphaned lock ${key} from a previous process`)
+      return deleted > 0
+    } catch (err) {
+      this.logger.warn(`Could not release orphaned lock ${key}: ${(err as Error).message}`)
+      return false
+    }
+  }
 }

@@ -1,160 +1,197 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { In, Repository, type QueryDeepPartialEntity } from 'typeorm'
-import { SyncJobEntity, type SyncJobKind, type SyncJobStatus, type SyncJobTrigger } from './entities'
-import { LockService } from '../../common/lock.service'
+import { IsNull, Not, Repository, type QueryDeepPartialEntity } from 'typeorm'
+import { SyncStateEntity, SYNC_KINDS, type SyncKind, type SyncMode, type SyncStatus } from './entities'
+import { LockService, type Lock } from '../../common/lock.service'
 import { SyncService } from '../marketplace/sync.service'
 import { HistorySyncService } from '../marketplace/history-sync.service'
 import { describeError, isTransientError } from './transient'
 
 /** A backfill is a long unbounded scrape; the TTL must outlive a normal run. */
-const LOCK_TTL_SECONDS = 3600
+const LOCK_TTL_SECONDS = 7200
 
 /** Transient-failure budget. Kept small: a real outage should fail visibly, not hang. */
 const MAX_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 2000
 
+/** Guard rail for a backfill. The upstream API has no natural end. */
+const DEFAULT_MAX_PAGES = 200
+
 export interface EnqueueOptions {
-  kind: SyncJobKind
-  mode: 'all' | 'latest' | 'full'
-  trigger: SyncJobTrigger
-  accountId?: number | null
-  itemName?: string | null
+  kind: SyncKind
+  mode: SyncMode
+  itemName?: string
   maxPages?: number
 }
 
+export interface EnqueueResult {
+  /** True when a run of this kind was already in flight and this call joined it. */
+  deduped: boolean
+  kind: SyncKind
+  mode: SyncMode
+  runningSince: string | null
+}
+
+export interface SyncKindStatus {
+  kind: SyncKind
+  running: boolean
+  runningSince: string | null
+  mode: SyncMode | null
+  lastStatus: SyncStatus | null
+  lastFinishedAt: string | null
+  /** `synced` lifted out of `lastStats`, since every scraper reports it. */
+  lastSynced: number | null
+  /** The raw blob, for kind-specific extras such as history's enriched/claimed. */
+  lastStats: Record<string, number> | null
+  lastError: string | null
+}
+
 export interface SyncStatusSnapshot {
-  running: SyncJobEntity | null
-  queued: SyncJobEntity | null
-  lastCompleted: { kind: SyncJobKind; finishedAt: Date; stats: Record<string, unknown> | null } | null
-  recent: SyncJobEntity[]
+  marketplace: SyncKindStatus
+  history: SyncKindStatus
 }
 
 /**
- * Queues scraper work and runs it in the background.
+ * Runs scraper work in the background, one run per kind at a time.
  *
- * Why this exists: sync used to be a blocking IPC call that paginated the
- * upstream API to exhaustion while the caller waited. In a shared web container
- * that is a liability — it holds a request open, it is unbounded, and a deploy
- * (`compose down`) kills it mid-flight. Now an admin enqueues a row, the request
- * returns immediately, and the UI polls the row for progress.
+ * Why this exists: sync used to be a blocking IPC call that paginated the upstream
+ * API to exhaustion while the caller waited. In a shared web container that is a
+ * liability — it holds a request open, it is unbounded, and a deploy
+ * (`compose down`) kills it mid-flight. Now a request acquires a lock and returns,
+ * and the UI polls one row per kind for progress.
+ *
+ * Dedupe is the lock, not a table lookup. The lock key is `sync:<kind>`, so two
+ * concurrent triggers of the same kind contend for the same key whether they
+ * arrive at this process or at another one; the in-process `inflight` set then
+ * covers the window before the lock is visible, and the case where a long run
+ * outlives its TTL. Keying on a job id, as an earlier version did, meant the lock
+ * never actually contended and the table query was doing all the work.
  */
 @Injectable()
 export class SyncOrchestratorService implements OnApplicationBootstrap {
   private readonly logger = new Logger(SyncOrchestratorService.name)
-  private readonly inflight = new Set<number>()
+  private readonly inflight = new Set<SyncKind>()
 
   constructor(
-    @InjectRepository(SyncJobEntity)
-    private readonly jobRepo: Repository<SyncJobEntity>,
+    @InjectRepository(SyncStateEntity)
+    private readonly stateRepo: Repository<SyncStateEntity>,
     private readonly lock: LockService,
     private readonly marketplaceSync: SyncService,
     private readonly historySync: HistorySyncService
   ) {}
 
   /**
-   * A job left "running" cannot still be running: the process that owned it has
-   * either died or been redeployed. Mark those interrupted on boot so the UI does
-   * not show a spinner forever.
+   * Recovers from a process that died mid-run.
+   *
+   * A run left with `running_since` set cannot still be running: the process that
+   * owned it has either died or been redeployed. Its Redis lock is orphaned in the
+   * same way, and is the more dangerous of the two — it outlives the row, so
+   * without releasing it every later trigger dedupes against a run that no longer
+   * exists and sync silently stops until the TTL runs out.
    */
   async onApplicationBootstrap(): Promise<void> {
-    const stranded = await this.jobRepo.find({ where: { status: In(['running', 'queued']) } })
-    if (stranded.length === 0) return
-    this.logger.warn(`Marking ${stranded.length} stranded sync job(s) as interrupted`)
-    await this.jobRepo.update(
-      { id: In(stranded.map((j) => j.id)) },
-      { status: 'interrupted', finishedAt: new Date(), error: 'Interrupted by restart' }
-    )
+    const stranded = await this.stateRepo.find({
+      where: SYNC_KINDS.map((kind) => ({ kind, runningSince: Not(IsNull()) })),
+    })
+
+    if (stranded.length > 0) {
+      this.logger.warn(`Marked ${stranded.length} interrupted sync(s) from a previous run`)
+      await this.stateRepo.update(
+        { runningSince: Not(IsNull()) },
+        {
+          runningSince: null,
+          lastStatus: 'interrupted',
+          lastFinishedAt: new Date(),
+          lastError: 'Interrupted by restart',
+        } as QueryDeepPartialEntity<SyncStateEntity>
+      )
+    }
+
+    // Released for every kind, not just the stranded ones: a process killed between
+    // taking the lock and committing the row would leave the lock with no row to
+    // match it.
+    for (const kind of SYNC_KINDS) {
+      await this.lock.forceRelease(`sync:${kind}`)
+    }
   }
 
   /**
-   * Creates a job and starts it in the background. If one of the same kind is
-   * already queued or running, that one is returned instead — a double-clicked
-   * "Sync full" must not queue a second unbounded scrape of the same API.
+   * Claims the lock for this kind and starts the scrape in the background.
+   *
+   * Returns immediately. If a run of the same kind is already going — in this
+   * process or another — that run is joined rather than duplicated, because a
+   * double-clicked "Sync full" must not launch a second unbounded scrape of the
+   * same API.
    */
-  async enqueue(opts: EnqueueOptions): Promise<{ job: SyncJobEntity; deduped: boolean }> {
-    const existing = await this.jobRepo.findOne({
-      where: { kind: opts.kind, status: In(['queued', 'running']) },
-      order: { id: 'DESC' },
-    })
-    if (existing) {
-      this.logger.log(`Reusing in-flight ${opts.kind} job #${existing.id}`)
-      return { job: existing, deduped: true }
+  async enqueue(opts: EnqueueOptions): Promise<EnqueueResult> {
+    const { kind, mode } = opts
+
+    if (this.inflight.has(kind)) {
+      this.logger.log(`Joining in-flight ${kind} sync`)
+      return { deduped: true, kind, mode, runningSince: await this.runningSinceOf(kind) }
     }
 
-    const job = await this.jobRepo.save(
-      this.jobRepo.create({
-        kind: opts.kind,
-        status: 'queued',
-        trigger: opts.trigger,
-        accountId: opts.accountId ?? null,
-        mode: opts.mode,
-        itemName: opts.itemName ?? null,
-        maxPages: opts.maxPages ?? 200,
-        stats: null,
-        error: null,
-        startedAt: null,
-        finishedAt: null,
-      })
+    const lock = await this.lock.acquire(`sync:${kind}`, LOCK_TTL_SECONDS)
+    if (!lock) {
+      this.logger.log(`Lock for ${kind} held elsewhere; joining that run`)
+      return { deduped: true, kind, mode, runningSince: await this.runningSinceOf(kind) }
+    }
+
+    const startedAt = new Date()
+    this.inflight.add(kind)
+
+    // Only the in-flight columns are written, so the previous run's finished_at and
+    // stats stay readable while this one is under way.
+    await this.stateRepo.upsert(
+      { kind, mode, runningSince: startedAt, lastStartedAt: startedAt, lastStatus: 'running' },
+      { conflictPaths: ['kind'] }
     )
 
-    // Deliberately not awaited: the HTTP response returns as soon as the row
-    // exists, and the work continues on the event loop.
-    void this.run(job.id)
-    return { job, deduped: false }
+    // Deliberately not awaited: the HTTP response returns as soon as the lock is
+    // held, and the work continues on the event loop.
+    void this.run(opts, lock)
+
+    return { deduped: false, kind, mode, runningSince: startedAt.toISOString() }
   }
 
-  async run(jobId: number): Promise<void> {
-    if (this.inflight.has(jobId)) return
-    this.inflight.add(jobId)
-
-    const lock = await this.lock.acquire(`sync:${jobId}`, LOCK_TTL_SECONDS)
-    if (!lock) {
-      await this.finish(jobId, 'failed', null, 'Could not acquire sync lock')
-      this.inflight.delete(jobId)
-      return
-    }
-
+  /** Executes the scrape and always leaves the row in a truthful terminal state. */
+  async run(opts: EnqueueOptions, lock: Lock): Promise<void> {
+    const { kind, mode } = opts
     try {
-      const job = await this.jobRepo.findOne({ where: { id: jobId } })
-      if (!job) return
-      if (job.status === 'interrupted' || job.status === 'done') return
-
-      await this.jobRepo.update({ id: jobId }, { status: 'running', startedAt: new Date() })
-      this.logger.log(`Running sync job #${jobId} kind=${job.kind} mode=${job.mode}`)
-
-      const stats = await this.execute(job)
-      await this.finish(jobId, 'done', stats, null)
-      this.logger.log(`Sync job #${jobId} done: ${JSON.stringify(stats)}`)
+      this.logger.log(`Running sync kind=${kind} mode=${mode}`)
+      const stats = await this.execute(opts)
+      await this.finish(kind, 'done', stats, null)
+      this.logger.log(`Sync ${kind}/${mode} done: ${JSON.stringify(stats)}`)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.logger.error(`Sync job #${jobId} failed: ${message}`)
-      await this.finish(jobId, 'failed', null, message)
+      this.logger.error(`Sync ${kind}/${mode} failed: ${message}`)
+      await this.finish(kind, 'failed', null, message)
     } finally {
       await lock.release().catch(() => undefined)
-      this.inflight.delete(jobId)
+      this.inflight.delete(kind)
     }
   }
 
-  private async execute(job: SyncJobEntity): Promise<Record<string, unknown>> {
+  private async execute(opts: EnqueueOptions): Promise<Record<string, unknown>> {
+    const { kind, mode, itemName, maxPages = DEFAULT_MAX_PAGES } = opts
     // Retried because a DNS blip or 5xx from the upstream should not lose the
-    // whole job. Re-running is safe: both scrapers upsert by a stable key
+    // whole run. Re-running is safe: both scrapers upsert by a stable key
     // (item id, tx hash), so a retry is idempotent, just slower.
-    return this.withRetry(`sync #${job.id} ${job.kind}/${job.mode}`, async () => {
-      if (job.kind === 'marketplace') {
+    return this.withRetry(`sync ${kind}/${mode}`, async () => {
+      if (kind === 'marketplace') {
         const res = await this.marketplaceSync.refresh({
-          itemName: job.itemName ?? undefined,
-          maxPages: job.mode === 'all' ? job.maxPages : undefined,
-          mode: job.mode === 'all' ? 'all' : 'latest',
+          itemName,
+          maxPages: mode === 'all' ? maxPages : undefined,
+          mode: mode === 'all' ? 'all' : 'latest',
         })
-        return { ...res, mode: job.mode }
+        return { ...res, mode }
       }
 
       const res =
-        job.mode === 'full'
-          ? await this.historySync.backfill({ maxPages: job.maxPages })
+        mode === 'full'
+          ? await this.historySync.backfill({ maxPages })
           : await this.historySync.refreshLatest()
-      return { ...res, mode: job.mode }
+      return { ...res, mode }
     })
   }
 
@@ -178,43 +215,65 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
   }
 
   private async finish(
-    jobId: number,
-    status: SyncJobStatus,
+    kind: SyncKind,
+    status: Exclude<SyncStatus, 'running'>,
     stats: Record<string, unknown> | null,
     error: string | null
   ): Promise<void> {
     // Cast needed because TypeORM's jsonb partial type does not admit a plain
     // Record<string, unknown>, which is exactly what the scrapers return.
-    await this.jobRepo.update(
-      { id: jobId },
-      { status, stats, error, finishedAt: new Date() } as QueryDeepPartialEntity<SyncJobEntity>
+    await this.stateRepo.upsert(
+      {
+        kind,
+        runningSince: null,
+        lastFinishedAt: new Date(),
+        lastStatus: status,
+        lastStats: stats,
+        lastError: error,
+      } as QueryDeepPartialEntity<SyncStateEntity>,
+      { conflictPaths: ['kind'] }
     )
   }
 
-  async getJob(id: number): Promise<SyncJobEntity | null> {
-    return this.jobRepo.findOne({ where: { id } })
-  }
-
-  async recentJobs(limit = 10): Promise<SyncJobEntity[]> {
-    return this.jobRepo.find({ order: { id: 'DESC' }, take: Math.min(50, Math.max(1, limit)) })
-  }
-
-  /** Everything the UI needs to render sync state in one request. */
+  /**
+   * Everything the UI needs, keyed by kind.
+   *
+   * Per kind matters: a single "most recent completed run" makes the marketplace
+   * page display a history run's item count as though it were the marketplace's.
+   */
   async status(): Promise<SyncStatusSnapshot> {
-    const [running, queued, lastDone, recent] = await Promise.all([
-      this.jobRepo.findOne({ where: { status: 'running' }, order: { id: 'DESC' } }),
-      this.jobRepo.findOne({ where: { status: 'queued' }, order: { id: 'DESC' } }),
-      this.jobRepo.findOne({ where: { status: 'done' }, order: { finishedAt: 'DESC', id: 'DESC' } }),
-      this.recentJobs(5),
-    ])
+    const rows = await this.stateRepo.find({ where: SYNC_KINDS.map((kind) => ({ kind })) })
+    const byKind = new Map(rows.map((row) => [row.kind, row]))
 
-    return {
-      running,
-      queued,
-      lastCompleted: lastDone?.finishedAt
-        ? { kind: lastDone.kind, finishedAt: lastDone.finishedAt, stats: lastDone.stats }
-        : null,
-      recent,
+    const forKind = (kind: SyncKind): SyncKindStatus => {
+      const row = byKind.get(kind)
+      const running = row?.runningSince != null
+      const synced = row?.lastStats?.synced
+      return {
+        kind,
+        running,
+        runningSince: row?.runningSince ? row.runningSince.toISOString() : null,
+        mode: row?.mode ?? null,
+        lastStatus: row?.lastStatus ?? null,
+        lastFinishedAt: row?.lastFinishedAt ? row.lastFinishedAt.toISOString() : null,
+        lastSynced: typeof synced === 'number' ? synced : null,
+        // The scrapers only ever put numbers in here; typed as such so views can
+        // read kind-specific extras without casting.
+        lastStats: (row?.lastStats as Record<string, number> | null) ?? null,
+        lastError: row?.lastError ?? null,
+      }
+    }
+
+    return { marketplace: forKind('marketplace'), history: forKind('history') }
+  }
+
+  /** Best-effort read for the deduped enqueue response; never throws. */
+  private async runningSinceOf(kind: SyncKind): Promise<string | null> {
+    try {
+      const row = await this.stateRepo.findOne({ where: { kind } })
+      return row?.runningSince ? row.runningSince.toISOString() : null
+    } catch {
+      return null
     }
   }
 }

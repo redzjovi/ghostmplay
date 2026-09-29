@@ -5,13 +5,13 @@
       <div class="flex items-center gap-2">
         <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
         <template v-if="sync.isAdmin">
-          <Button variant="outline" :disabled="sync.isBusy || sync.loading" @click="triggerSync('latest')">
-            <Loader2 v-if="sync.isBusy && sync.active?.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ sync.isBusy && sync.active?.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
+          <Button variant="outline" :disabled="mkt.running || sync.loading" @click="triggerSync('latest')">
+            <Loader2 v-if="mkt.running && mkt.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
+            {{ mkt.running && mkt.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
           </Button>
-          <Button :disabled="sync.isBusy || sync.loading" @click="triggerSync('all')">
-            <Loader2 v-if="sync.isBusy && sync.active?.mode==='all'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ sync.isBusy && sync.active?.mode==='all' ? 'Queued' : 'Sync Full' }}
+          <Button :disabled="mkt.running || sync.loading" @click="triggerSync('all')">
+            <Loader2 v-if="mkt.running && mkt.mode==='all'" class="mr-2 h-4 w-4 animate-spin" />
+            {{ mkt.running && mkt.mode==='all' ? 'Syncing…' : 'Sync Full' }}
           </Button>
         </template>
       </div>
@@ -123,9 +123,9 @@
           </ToggleGroup>
         </div>
 
-        <div v-if="sync.isBusy && sync.isAdmin" class="text-sm text-muted-foreground flex items-center gap-2">
+        <div v-if="mkt.running && sync.isAdmin" class="text-sm text-muted-foreground flex items-center gap-2">
           <Loader2 class="h-4 w-4 animate-spin" />
-          {{ sync.active?.status === 'queued' ? 'Queued' : 'Syncing' }} {{ syncModeLabel(sync.active?.mode) }}…
+          Syncing {{ syncModeLabel(mkt.mode) }}…
         </div>
         <Alert v-if="sync.error" variant="destructive" class="py-2">
           <AlertDescription>{{ sync.error }}</AlertDescription>
@@ -299,7 +299,7 @@
             </ToggleGroup>
           </div>
 
-          <div v-if="sync.isBusy && sync.isAdmin" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> {{ sync.active?.status === 'queued' ? 'Queued' : 'Syncing' }} {{ syncModeLabel(sync.active?.mode) }} …</div>
+          <div v-if="mkt.running && sync.isAdmin" class="text-sm text-muted-foreground flex items-center gap-2"><Loader2 class="h-4 w-4 animate-spin" /> Syncing {{ syncModeLabel(mkt.mode) }} …</div>
           <div class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }} · Page {{ page }}/{{ totalPages }}</div>
           <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
             <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
@@ -421,6 +421,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 import { useMarketplaceStore } from '@/stores/marketplace'
 import { useFavoritesStore } from '@/stores/favorites'
+import { useAuthStore } from '@/stores/auth'
 import { useSyncStore } from '@/stores/sync'
 import type { GradeEffect, MarketplaceFavorite } from '@ghostmplay/shared'
 import ItemPreviewDialog from '@/components/ItemPreviewDialog.vue'
@@ -444,6 +445,9 @@ function normalizeImageUrl(raw: string): string {
 type Item = { tokenId:number; name:string; imageUrl:string; equipmentType:string; level:number; enchant:number; gradeEffect:string; price:number; currency:string; mintTime?: string | null; createdAt?: string | null; sold?: boolean }
 const store = useMarketplaceStore()
 const favStore = useFavoritesStore()
+// Browsing is public; favorites are per-account. `next` returns the visitor to
+// this exact page (filters and all) once they have signed in.
+const auth = useAuthStore()
 const loadedImages = ref<Set<string>>(new Set())
 const errorImages = ref<Set<string>>(new Set())
 function imageKey(it: Item): string { return `${it.tokenId}:${normalizeImageUrl(it.imageUrl)}` }
@@ -503,8 +507,11 @@ const sort = ref<'recent' | 'price_asc' | 'price_desc'>(
 )
 const page = ref<number>(Number(route.query.page) || 1)
 
-// Sync is queued server-side and admin-only; see stores/sync.ts.
+// Sync runs in the background server-side and is admin-only; see stores/sync.ts.
+// Only this page's kind is bound here, so a history backfill neither disables these
+// buttons nor reports its item count as the marketplace's.
 const sync = useSyncStore()
+const mkt = computed(() => sync.forKind('marketplace'))
 const lastSynced = ref<number | null>(null)
 const lastMode = ref<'all' | 'latest' | null>(null)
 const PAGE_SIZES = [12, 24, 48, 96]
@@ -593,7 +600,7 @@ watch(() => route.path, async (newPath, oldPath) => {
   const wasFav = oldPath?.startsWith('/marketplaces/favorites')
   const isFav = newPath.startsWith('/marketplaces/favorites')
   if (isFav) {
-    await favStore.fetchFavorites()
+    if (auth.isAuthenticated) await favStore.fetchFavorites()
     await restoreFavoriteFromUrl()
   } else if (wasFav && newPath === '/marketplaces/list') {
     // Clean defaults when going to list from favorites detail/list
@@ -671,28 +678,29 @@ async function load(p = page.value) {
   })
 }
 async function triggerSync(mode: 'all' | 'latest' = 'latest') {
-  if (sync.isBusy) return
+  if (mkt.value.running) return
   try {
     await sync.enqueue({ kind: 'marketplace', mode, itemName: q.value || undefined })
-    // The scrape runs server-side; reload this page once the job reports done.
+    // The scrape runs server-side; reload this page once the run reports done.
     watchForSyncResult(mode)
   } catch (e) {
     console.error('sync enqueue failed', e)
   }
 }
 
-/** Waits for the queued job to finish, then refreshes the visible data. */
+/** Waits for the run to finish, then refreshes the visible data. */
 function watchForSyncResult(mode: 'all' | 'latest') {
   const startedAt = Date.now()
   const timer = setInterval(async () => {
     await sync.refresh()
-    const active = sync.active
-    // Stop if the job left the queue/running state, or after a hard ceiling.
-    if ((!active && Date.now() - startedAt > 1000) || Date.now() - startedAt > 10 * 60 * 1000) {
+    const kind = mkt.value
+    // Stop once this kind stops running, or after a hard ceiling.
+    if ((!kind.running && Date.now() - startedAt > 1000) || Date.now() - startedAt > 10 * 60 * 1000) {
       clearInterval(timer)
-      const done = sync.status?.lastCompleted
-      if (done && Date.parse(done.finishedAt) >= startedAt) {
-        lastSynced.value = sync.lastSyncedCount
+      // Only adopt the numbers if this row's run finished after we asked for it,
+      // so a stale timestamp from a previous sync is not reported as fresh.
+      if (kind.lastFinishedAt && Date.parse(kind.lastFinishedAt) >= startedAt) {
+        lastSynced.value = kind.lastSynced
         lastMode.value = mode
         await store.fetchFilterOptions(true)
         pruneSelections()
@@ -702,9 +710,9 @@ function watchForSyncResult(mode: 'all' | 'latest') {
   }, 3000)
 }
 const lastSyncedLabel = computed(() => {
-  const at = sync.lastSyncedAt
+  const at = mkt.value.lastFinishedAt
   if (!at) return 'Not synced yet'
-  const n = sync.lastSyncedCount
+  const n = mkt.value.lastSynced
   return `Last sync: ${new Date(at).toLocaleString()}${n === null ? '' : ` · ${n} new`}`
 })
 
@@ -731,7 +739,13 @@ function openPreview(it: Item) {
 }
 
 // Favorites actions
-function openAddFavorite(){ showAddFavorite.value=true }
+/** Sends a signed-out visitor to the login form, remembering where they were. */
+function requireAuth(): boolean {
+  if (auth.isAuthenticated) return true
+  void router.push({ name: 'login', query: { next: route.fullPath } })
+  return false
+}
+function openAddFavorite(){ if(!requireAuth()) return; showAddFavorite.value=true }
 async function onSaveFavorite(name:string){
   try{
     await favStore.create({ name, q: q.value.trim() || null, equipmentTypes: [...selectedEquipmentTypes.value], gradeEffects: [...selectedGradeEffects.value], sort: sort.value })
@@ -832,7 +846,10 @@ onMounted(async () => {
     else router.replace({ path: '/marketplaces/list', query: rest })
     return
   }
-  await Promise.all([store.fetchFilterOptions(), favStore.fetchFavorites()])
+  // Filters are public; favorites are not. Fetching them in the same Promise.all
+  // would reject on 401 for a guest and skip load() entirely, leaving the list empty.
+  await store.fetchFilterOptions()
+  if (auth.isAuthenticated) await favStore.fetchFavorites().catch(() => {})
   // No-op for non-admins: the store checks the role and the endpoints are 403 anyway.
   void sync.start()
   // If URL has fav param under /favorites (e.g., back from /items/:id), restore detail before first load

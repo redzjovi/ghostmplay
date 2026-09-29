@@ -108,26 +108,38 @@ const del = (path: string): Promise<void> => request<void>(path, { method: 'DELE
  */
 const ALLOWED_EXTERNAL = /^https:\/\/market\.numine\.io\/games\/GhostM\/nfts\/\d+$/
 
-export interface SyncJob {
-  id: number
-  kind: 'marketplace' | 'history'
-  status: 'queued' | 'running' | 'done' | 'failed' | 'interrupted'
-  trigger: 'cron' | 'admin'
-  mode: string
-  itemName: string | null
-  maxPages: number
-  stats: Record<string, number> | null
-  error: string | null
-  createdAt: string
-  startedAt: string | null
-  finishedAt: string | null
+export type SyncKind = 'marketplace' | 'history'
+
+/**
+ * One row of sync state, per kind. There is no job list and no queue: the server
+ * serialises runs with a lock keyed by kind, so a second trigger joins the run
+ * already in flight instead of adding a row.
+ */
+export interface SyncKindStatus {
+  kind: SyncKind
+  running: boolean
+  runningSince: string | null
+  mode: string | null
+  lastStatus: 'running' | 'done' | 'failed' | 'interrupted' | null
+  lastFinishedAt: string | null
+  /** Item count from the last completed run, lifted out of the stats blob. */
+  lastSynced: number | null
+  /** Raw scraper stats, for kind-specific extras such as history's enriched/claimed. */
+  lastStats: Record<string, number> | null
+  lastError: string | null
 }
 
 export interface SyncStatus {
-  running: SyncJob | null
-  queued: SyncJob | null
-  lastCompleted: { kind: string; finishedAt: string; stats: Record<string, number> | null } | null
-  recent: SyncJob[]
+  marketplace: SyncKindStatus
+  history: SyncKindStatus
+}
+
+/** `deduped` means a run of this kind was already going and this call joined it. */
+export interface EnqueueSyncResult {
+  deduped: boolean
+  kind: SyncKind
+  mode: string
+  runningSince: string | null
 }
 
 export interface WebApiAccount {
@@ -143,13 +155,11 @@ export interface WebApi {
     register(username: string, password: string): Promise<WebApiAccount>
     logout(): Promise<void>
   }
-  /** Admin-only. Scraper work is queued, not awaited — poll `sync.status` for progress. */
+  /** Admin-only. Scraper work is locked and not awaited — poll `sync.status` for progress. */
   admin: {
     sync: {
       status(): Promise<SyncStatus>
-      jobs(limit?: number): Promise<SyncJob[]>
-      job(id: number): Promise<SyncJob>
-      enqueue(input: { kind: 'marketplace' | 'history'; mode?: string; itemName?: string; maxPages?: number }): Promise<{ job: SyncJob; deduped: boolean }>
+      enqueue(input: { kind: SyncKind; mode?: string; itemName?: string; maxPages?: number }): Promise<EnqueueSyncResult>
     }
   }
   marketplace: {
@@ -207,8 +217,6 @@ export const api: WebApi = {
   admin: {
     sync: {
       status: () => get('/admin/sync/status'),
-      jobs: (limit = 10) => get('/admin/sync/jobs', { limit }),
-      job: (id) => get(`/admin/sync/jobs/${id}`),
       enqueue: (input) => post('/admin/sync', input),
     },
   },

@@ -1,29 +1,16 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  ParseIntPipe,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common'
 import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator'
-import { Transform } from 'class-transformer'
-import { toOptionalInt } from '../../../common/transforms'
 import { SyncOrchestratorService, type SyncStatusSnapshot } from '../sync-orchestrator.service'
 import { AdminGuard } from '../../auth/guards'
-import type { SyncJobEntity } from '../entities'
+import type { SyncKind, SyncMode } from '../entities'
 
 export class EnqueueSyncDto {
   @IsIn(['marketplace', 'history'])
-  kind!: 'marketplace' | 'history'
+  kind!: SyncKind
 
   @IsOptional()
   @IsIn(['all', 'latest', 'full'])
-  mode?: 'all' | 'latest' | 'full'
+  mode?: SyncMode
 
   @IsOptional()
   @IsString()
@@ -38,15 +25,6 @@ export class EnqueueSyncDto {
   maxPages?: number
 }
 
-export class JobListQueryDto {
-  @IsOptional()
-  @Transform(toOptionalInt)
-  @IsInt()
-  @Min(1)
-  @Max(50)
-  limit?: number
-}
-
 /**
  * Sync is admin-only. It is the only expensive, third-party-hammering operation
  * in the app, so leaving it to every signed-up visitor would be an easy way to
@@ -57,37 +35,24 @@ export class JobListQueryDto {
 export class SyncAdminController {
   constructor(private readonly orchestrator: SyncOrchestratorService) {}
 
+  /** One entry per kind, so each page can render its own progress. */
   @Get('status')
   status(): Promise<SyncStatusSnapshot> {
     return this.orchestrator.status()
   }
 
-  @Get('jobs')
-  jobs(@Query() query: JobListQueryDto): Promise<SyncJobEntity[]> {
-    return this.orchestrator.recentJobs(query.limit)
-  }
-
-  @Get('jobs/:id')
-  async job(@Param('id', ParseIntPipe) id: number): Promise<SyncJobEntity> {
-    const job = await this.orchestrator.getJob(id)
-    if (!job) throw new NotFoundException(`Sync job ${id} not found`)
-    return job
-  }
-
-  /** Enqueues and returns immediately; poll `jobs/:id` or `status` for progress. */
+  /** Claims the lock and returns immediately; poll `status` for progress. */
   @Post()
   @HttpCode(202)
-  async enqueue(@Body() dto: EnqueueSyncDto) {
-    // History uses "full" for a backfill and "latest" for incremental;
-    // marketplace uses "all"/"latest". Default each to its own latest mode.
-    const mode = dto.mode ?? 'latest'
-    const { job, deduped } = await this.orchestrator.enqueue({
+  enqueue(@Body() dto: EnqueueSyncDto) {
+    return this.orchestrator.enqueue({
       kind: dto.kind,
-      mode,
-      trigger: 'admin',
-      itemName: dto.itemName ?? null,
+      // History uses "full" for a backfill and "latest" for incremental;
+      // marketplace uses "all"/"latest". Default to the incremental one, which is
+      // bounded by what is new rather than by the size of the history.
+      mode: dto.mode ?? 'latest',
+      itemName: dto.itemName,
       maxPages: dto.maxPages,
     })
-    return { job, deduped }
   }
 }

@@ -9,7 +9,7 @@ import { HealthModule } from './modules/health/health.module'
 import { AuthModule } from './modules/auth/auth.module'
 import { AccountEntity, SessionEntity } from './modules/auth/entities'
 import { SyncModule } from './modules/sync/sync.module'
-import { SyncJobEntity } from './modules/sync/entities'
+import { SyncStateEntity } from './modules/sync/entities'
 import { CommonModule } from './common/common.module'
 import {
   MarketplaceItemEntity,
@@ -31,7 +31,7 @@ export const ENTITIES = [
   MarketplaceTokenTransferEntity,
   AccountEntity,
   SessionEntity,
-  SyncJobEntity,
+  SyncStateEntity,
 ]
 
 @Module({

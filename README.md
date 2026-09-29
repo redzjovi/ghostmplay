@@ -10,7 +10,7 @@ PostgreSQL, and serves a Vue 3 SPA plus a REST API from a single container on
 ## Layout
 
 ```text
-apps/api/     NestJS: controllers, TypeORM entities, scraper, auth, sync jobs
+apps/api/     NestJS: controllers, TypeORM entities, scraper, auth, sync state
 apps/web/     Vue 3 SPA, served as static files by the API container
 packages/     shared DTO types
 ```
@@ -27,14 +27,14 @@ Node 22, pnpm 11, and a PostgreSQL 17 database.
 
 ## Local development
 
-You need a PostgreSQL and a Valkey. `pnpm db:up` starts both in Docker,
-reading host, port and credentials from the same `.env` the app uses, so the
-two can never disagree.
+You need a PostgreSQL and a Valkey. Both are defined in
+`docker-compose.dev.yml` and started with `pnpm db:up`, which blocks until each
+one reports healthy. The API itself runs on the host.
 
 ```bash
 pnpm install
 cp .env.example .env          # then set DATABASE_URL
-pnpm db:up                    # postgres 17 + valkey 8, waits until ready
+pnpm db:up                    # postgres 17 + valkey 8, waits until healthy
 pnpm dev                      # API on :8080 with watch mode
 pnpm dev:web                  # Vite on :5173, proxying /api to :8080
 ```
@@ -45,18 +45,38 @@ The API runs migrations on first boot, so the schema appears by itself, and
 the marketplace list will look broken when it is just untested.
 
 ```bash
-pnpm db:status                # ports, state, and whether migrations have run
+pnpm db:status                # container health, then schema + row counts
 pnpm db:reset                 # drop and recreate the database
-pnpm db:down                  # stop and remove both
+pnpm db:down                  # stop and remove containers, KEEP the data
+pnpm db:nuke                  # stop and remove containers AND the data
 pnpm db:logs pg               # tail a service
 ```
+
+Data lives in a named volume, so it survives `db:down` / `db:up` and only
+`db:nuke` discards it. `db:reset` empties the database but keeps the volume.
 
 `db:reset` recreates the database but does not restart the API, and migrations
 run at boot rather than on connect — so restart `pnpm dev` afterwards.
 
 The local images deliberately match production: `postgres:17-alpine` for
-PostgreSQL 17.4, and `valkey/valkey:8-alpine` for Valkey 8.0. Override with
-`DEV_PG_IMAGE` / `DEV_VALKEY_IMAGE` if needed.
+PostgreSQL 17.4, and `valkey/valkey:8-alpine` for Valkey 8.0. The API container
+in production reaches DOM Cloud's shared services over the host bridge, so
+`docker-compose.yml` is the production path and stays separate from this one.
+
+#### Credentials are declared twice, on purpose
+
+`docker-compose.dev.yml` hardcodes `POSTGRES_USER` / `POSTGRES_PASSWORD` /
+`POSTGRES_DB`, and `.env` holds the same facts inside `DATABASE_URL`. Compose
+could interpolate the former from the latter's surroundings, but not from a
+single URL, so one of the two has to be the source. The literals won because
+they are throwaway local values rather than secrets, and they keep the compose
+file readable on its own.
+
+The duplication is safe because `pnpm db:status` connects with the exact
+`DATABASE_URL` the API will use, over the host-mapped port, and names the
+offending part when they disagree — a rejected password, a missing database, or
+a port with nothing listening. Note that `POSTGRES_PASSWORD` only takes effect
+when the volume is *first* initialised, so changing it later needs `db:nuke`.
 
 ### The database address differs per environment
 
@@ -108,19 +128,28 @@ are reachable from inside a container at `10.0.2.2`, run on fast disk, and are
 included in the daily backup. Running a database in a container would spend RAM
 on a box that caps a process at 1-2GB.
 
-**Sync is queued, locked and admin-only.** Scraping the upstream API is by far the
-most expensive thing the app does, and the API has no natural end. A cron runs
-only the incremental `latest` mode every 5 minutes — it stops as soon as it meets
-an item already stored with the same `created_at`, so its cost tracks what is new
-rather than the size of history. Full backfills are admin-triggered, run under a
-Redis mutex with a page cap, and are reported through a `sync_jobs` row instead of
-holding an HTTP request open. If a deploy kills a job mid-flight, it is marked
-`interrupted` on the next boot rather than spinning forever.
+**Sync is locked and admin-only.** Scraping the upstream API is by far the most
+expensive thing the app does, and the API has no natural end. A cron runs only the
+incremental `latest` mode, once a minute — it stops as soon as it meets an item
+already stored with the same `created_at`, so on an idle upstream it is roughly one
+request that finds itself already up to date, and its cost tracks what is new
+rather than the size of history. Full backfills are admin-triggered and run under a
+page cap. Nothing is held open over an HTTP request: a trigger takes a lock, returns,
+and the UI polls. If a deploy kills a run mid-flight, it is marked `interrupted` on
+the next boot rather than spinning forever.
+
+**Deduplication is the lock, not a queue.** The lock key is `sync:<kind>`, so two
+triggers of the same kind contend whether they arrive at this process or another, and
+a cron tick that lands while the previous run is still going joins it instead of
+starting a second scrape. State lives in one row per kind (`sync_state`), which
+replaced an append-only `sync_jobs` table that grew every tick and had to be pruned;
+per-kind rows are also what let each page show its own progress, rather than a
+finished history run being reported as the marketplace's last sync.
 
 **Transient scraper failures are retried.** Outbound traffic from inside a
 rootless container is the weak point: DNS goes through Docker's embedded resolver
-and the network driver is documented as poor for egress, so a job can fail on
-`EAI_AGAIN` seconds after the container starts. A job retries transient failures
+and the network driver is documented as poor for egress, so a run can fail on
+`EAI_AGAIN` seconds after the container starts. A run retries transient failures
 (DNS, connection reset, 408/425/429/5xx) three times with backoff, and does not
 retry anything that would fail identically on a second try. Re-running is safe
 because both scrapers upsert by a stable key.
@@ -132,6 +161,16 @@ password take the same time.
 
 **Favorites are per-account.** Every lookup is scoped by `account_id`, so another
 user's favorite id is indistinguishable from a missing one.
+
+**Browsing is public; only favorites and admin sync need a session.** The
+marketplace list, the history list and item detail read endpoints that take no
+account, so a signed-out visitor gets the same data as a signed-in one and the
+`/auth/me` call is only there to personalise the chrome. Guards are opt-in per
+controller, and only `favorites.controller.ts` (`RequireAuthGuard`) and
+`sync-admin.controller.ts` (`AdminGuard`) apply one — the marketplace and history
+controllers deliberately do not, so adding one there is a product decision, not a
+clean-up. The client guard in `router/index.ts` fails closed: a route is gated
+unless it carries `meta.public`, so a new page has to opt in to being public.
 
 ## Deployment
 

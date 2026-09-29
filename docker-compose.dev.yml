@@ -1,0 +1,60 @@
+# ghostmplay — LOCAL DEVELOPMENT data services
+#
+# The API runs on the host via `pnpm dev`; only PostgreSQL and Valkey are
+# containerised. In production this file is never read: `.drone.yml` names
+# `docker-compose.yml` explicitly, and DOM Cloud's bridge only ever receives
+# that filename. Do not rename this file to `docker-compose.yml`.
+#
+#   pnpm db:up      start, wait until healthy
+#   pnpm db:down    stop, KEEP data
+#   pnpm db:reset   drop and recreate the database (migrations replay on boot)
+#   pnpm db:nuke    stop and DELETE the data volume
+#
+# The explicit `name` keeps this project's containers and volume from clashing
+# with the production compose project.
+name: ghostmplay-dev
+
+services:
+  postgres:
+    # Matches DOM Cloud's shared PostgreSQL 17, so migrations behave the same
+    # locally as they do in production.
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      # These are throwaway local credentials, not secrets. They MUST match the
+      # host/port/user/password/database in DATABASE_URL in .env — `pnpm db:status`
+      # connects with that URL and reports precisely which part disagrees.
+      #
+      # They only take effect when the data volume is first initialised. Change
+      # them later and you must `pnpm db:nuke` for the new ones to apply.
+      POSTGRES_USER: ghostmplay
+      POSTGRES_PASSWORD: ghostmplay
+      POSTGRES_DB: ghostmplay
+    ports:
+      - '5432:5432'
+    volumes:
+      # Named, not anonymous. An anonymous volume is created per `up` and left
+      # behind as garbage by `down`; this one is reused across restarts, which is
+      # what makes local data survive a stop/start cycle.
+      - 'pgdata:/var/lib/postgresql/data'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ghostmplay -d ghostmplay']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  valkey:
+    # Matches DOM Cloud's shared Valkey 8.0.
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    # No password locally; DATABASE_URL in .env is redis://127.0.0.1:6379.
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'valkey-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:

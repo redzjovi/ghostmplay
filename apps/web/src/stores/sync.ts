@@ -1,37 +1,62 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { SyncJob, SyncStatus } from '@/api/http-client'
+import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult } from '@/api/http-client'
 import { useAuthStore } from './auth'
 
 /**
- * Sync is admin-only and queued, so the UI never awaits a scrape. This store
- * polls the status endpoint while a job is in flight and stops as soon as the
- * job reaches a terminal state.
+ * Sync is admin-only and runs in the background, so the UI never awaits a scrape.
+ * This store polls the status endpoint while any run is in flight and stops as soon
+ * as nothing is running.
+ *
+ * State is per kind rather than global. The server keeps one row per kind, and each
+ * page renders only its own scrape — a shared "is busy" flag would let a history
+ * backfill disable the marketplace button and, worse, show history's item count as
+ * the marketplace's last sync.
  */
 const POLL_MS = 3000
-const TERMINAL = new Set(['done', 'failed', 'interrupted'])
+
+const EMPTY: Record<SyncKind, SyncKindStatus> = {
+  marketplace: {
+    kind: 'marketplace',
+    running: false,
+    runningSince: null,
+    mode: null,
+    lastStatus: null,
+    lastFinishedAt: null,
+    lastSynced: null,
+    lastStats: null,
+    lastError: null,
+  },
+  history: {
+    kind: 'history',
+    running: false,
+    runningSince: null,
+    mode: null,
+    lastStatus: null,
+    lastFinishedAt: null,
+    lastSynced: null,
+    lastStats: null,
+    lastError: null,
+  },
+}
 
 export const useSyncStore = defineStore('sync', () => {
   const status = ref<SyncStatus | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const lastEnqueued = ref<SyncJob | null>(null)
 
   let timer: ReturnType<typeof setTimeout> | null = null
 
   const auth = useAuthStore()
   const isAdmin = computed(() => auth.isAdmin)
 
-  /** The job the user is most likely watching, if any. */
-  const active = computed<SyncJob | null>(() => status.value?.running ?? status.value?.queued ?? null)
-  const isBusy = computed(() => active.value !== null)
+  /** This kind's slice of the snapshot, falling back to a never-run shape. */
+  function forKind(kind: SyncKind): SyncKindStatus {
+    return status.value?.[kind] ?? EMPTY[kind]
+  }
 
-  const lastSyncedAt = computed(() => status.value?.lastCompleted?.finishedAt ?? null)
-  const lastSyncedCount = computed(() => {
-    const stats = status.value?.lastCompleted?.stats
-    if (!stats) return null
-    return typeof stats.synced === 'number' ? stats.synced : null
-  })
+  /** Poll while *any* kind is running, so both pages stay live. */
+  const anyRunning = computed(() => (['marketplace', 'history'] as const).some((k) => forKind(k).running))
 
   function stopPolling() {
     if (timer) {
@@ -42,7 +67,7 @@ export const useSyncStore = defineStore('sync', () => {
 
   function schedule() {
     stopPolling()
-    if (!isBusy.value) return
+    if (!anyRunning.value) return
     timer = setTimeout(() => {
       void refresh().then(schedule)
     }, POLL_MS)
@@ -57,7 +82,7 @@ export const useSyncStore = defineStore('sync', () => {
     }
   }
 
-  /** Loads once on admin mount, then keeps polling only while a job runs. */
+  /** Loads once on admin mount, then keeps polling only while a run is going. */
   async function start(): Promise<void> {
     if (!isAdmin.value) return
     await refresh()
@@ -65,21 +90,20 @@ export const useSyncStore = defineStore('sync', () => {
   }
 
   /**
-   * Queues a scrape. Returns immediately — the job runs server-side. If a job of
-   * the same kind is already in flight the server returns that one instead, so a
-   * double-click cannot queue a second unbounded scrape.
+   * Asks the server to start a scrape and returns immediately. If a run of the same
+   * kind is already going the server joins that one instead, so a double-click
+   * cannot launch a second unbounded scrape.
    */
   async function enqueue(input: {
-    kind: 'marketplace' | 'history'
+    kind: SyncKind
     mode?: 'all' | 'latest' | 'full'
     itemName?: string
     maxPages?: number
-  }): Promise<{ job: SyncJob; deduped: boolean }> {
+  }): Promise<EnqueueSyncResult> {
     loading.value = true
     error.value = null
     try {
       const res = await window.api.admin.sync.enqueue(input)
-      lastEnqueued.value = res.job
       await refresh()
       schedule()
       return res
@@ -96,15 +120,11 @@ export const useSyncStore = defineStore('sync', () => {
     loading,
     error,
     isAdmin,
-    active,
-    isBusy,
-    lastSyncedAt,
-    lastSyncedCount,
-    lastEnqueued,
+    forKind,
+    anyRunning,
     refresh,
     start,
     stopPolling,
     enqueue,
-    isTerminal: (status?: string | null) => (status ? TERMINAL.has(status) : false),
   }
 })
