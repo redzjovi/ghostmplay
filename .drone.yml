@@ -1,0 +1,59 @@
+# DOM Cloud deployment script.
+#
+# Paste the contents of this file into the DOM Cloud portal under
+# Setup -> Deploy -> Add a deployment task. `$DOMAIN`, `$USERNAME`, `$PGPASSWD`,
+# `$RDPASSWD` and `$DATABASE` are provided by the platform.
+#
+# Requires the Kit plan or higher: Docker is not available below that.
+
+source:
+  url: https://github.com/redzjovi/ghostmplay
+  type: clone
+
+features:
+  # Rootless Docker, and lifts the 3-hour process cap so long-running processes
+  # stay up. Requires Kit plan.
+  - docker
+  # Free shared PostgreSQL 17.4, reachable from inside the container at 10.0.2.2.
+  - postgresql
+  # Shared Valkey, used for the registration rate limit and the sync mutex.
+  - redis
+  - ssl
+  # REQUIRED. market-api.numine.io and *.mypinata.cloud are not on DOM Cloud's
+  # outbound allow-list, so with the firewall on the scraper cannot reach the
+  # upstream API and sync silently returns nothing. Needs Lite plan or higher.
+  - firewall off
+
+commands:
+  # DOM Cloud's bridge runs `commands` before `services`, so this file exists by
+  # the time `docker compose up` reads it via `env_file`.
+  #
+  # 10.0.2.2 is the container's route to the host, where the shared PostgreSQL
+  # and Valkey instances listen. `localhost` inside a container is the container.
+  - printf 'DATABASE_URL=postgres://%s:%s@10.0.2.2:5432/%s\n' "$USERNAME" "$PGPASSWD" "$DATABASE" > .env
+  - printf 'REDIS_URL=redis://%s:%s@10.0.2.2:6379\n' "$DATABASE" "$RDPASSWD" >> .env
+  - printf 'NODE_ENV=production\n' >> .env
+  # Seeds the first admin account on first boot only. Once an admin exists this
+  # is a no-op, so these can be deleted from this file after the first deploy.
+  - printf 'ADMIN_USERNAME=admin\n' >> .env
+  - printf 'ADMIN_PASSWORD=CHANGE_ME_BEFORE_FIRST_DEPLOY\n' >> .env
+  - chmod 600 .env
+
+# The image is built here, on the server. There is no registry.
+#
+# IMPORTANT — first deploy only, run this over SSH *before* the first deployment
+# task:
+#
+#     cd ~/public_html && docker compose build
+#
+# DOM Cloud's deployment script has a hard 15-minute wall-clock limit that covers
+# `docker compose up --build`. The cap applies to the script, not to an
+# interactive SSH session, so priming the build cache there is untimed. After
+# this, only source layers rebuild. A cold build inside the script risks exceeding
+# the limit on a shared box.
+services: docker-compose.yml
+
+nginx:
+  # Forced to this value by the bridge when `services` is used; set explicitly so
+  # the intent is clear and survives editing the script.
+  root: public_html/public

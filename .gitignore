@@ -1,13 +1,18 @@
 node_modules
 dist
-out
 build
-.better-sqlite3
+.output
+.vercel
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+!.env.example
 *.db
 *.sqlite
 *.sqlite3
-ghostmplay.db
-.env
-.env.local
-dist-electron
-.npm
+.DS_Store
+
+# Local copy of the built web app, used to serve the SPA from the API process
+# during development. In production it is baked into the Docker image instead.
+apps/api/public

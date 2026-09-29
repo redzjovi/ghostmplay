@@ -1,0 +1,37 @@
+# ghostmplay — DOM Cloud deployment
+#
+# DOM Cloud's deployment bridge rewrites the published port below to a free port
+# in 10000-30000 (that range is firewalled off the public internet) and points
+# NGINX's `location /` proxy_pass at it. Do not hardcode the host port: it is
+# assigned on the first deploy and is not guaranteed to survive a server move.
+#
+# The image is built here, on the server, from the cloned source. There is no
+# registry. The bridge runs `docker compose up --build`, and the Dockerfile's
+# `test` stage gates the image, so a failing typecheck or test fails the deploy.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      # DOM Cloud runs rootless Docker, where the `pasta` network driver is
+      # documented as slow for outbound traffic — and that is exactly what pnpm
+      # uses to download ~500 packages at build time. Build on the host network
+      # instead.
+      network: host
+    restart: always
+    ports:
+      - '8080:8080'
+    # Written by the deployment script's `commands`, which DOM Cloud runs before
+    # `services`. Note that this also puts real secrets in the build context —
+    # `.dockerignore` excludes `.env`, which is what keeps them out of a layer.
+    env_file:
+      - .env
+    # No volumes: all state lives in DOM Cloud's shared PostgreSQL, which is
+    # reachable from inside the container at 10.0.2.2 and is included in the
+    # daily backup. Running a database container here would cost RAM on a box
+    # that already caps a process at 1-2GB.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

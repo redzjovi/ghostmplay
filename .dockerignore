@@ -1,0 +1,33 @@
+node_modules
+**/node_modules
+**/dist
+# Build artifacts. These must be excluded even when .gitignore already covers
+# them: Docker only reads .dockerignore, and a stale .tsbuildinfo makes tsc
+# believe the project is up to date so it emits nothing.
+*.tsbuildinfo
+**/*.tsbuildinfo
+**/.output
+**/.svelte-kit
+**/.nuxt
+**/.turbo
+.git
+.gitignore
+# .env is written into the build context by the deployment script before the
+# image is built. This line is the only thing keeping real database and admin
+# credentials out of a baked layer. Do not remove it.
+.env
+.env.*
+!.env.example
+*.log
+*.db
+*.sqlite*
+.ghostmplay-device-id
+out
+coverage
+docs
+.vscode
+.idea
+
+# NOTE: spec files are deliberately NOT excluded. The Dockerfile's `test` stage
+# runs the suite as a build gate. They are a few KB and never reach the final
+# image, which only copies node_modules, dist and public.

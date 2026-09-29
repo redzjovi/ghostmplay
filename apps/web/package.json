@@ -1,0 +1,39 @@
+{
+  "name": "@ghostmplay/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ghostmplay web client — Vue 3 SPA served by the NestJS container",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
+    "build:only": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ghostmplay/shared": "workspace:*",
+    "@vueuse/core": "^15.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "2.1.1",
+    "lucide-vue-next": "0.511.0",
+    "pinia": "^2.3.1",
+    "prismjs": "1.29.0",
+    "reka-ui": "2.5.0",
+    "tailwind-merge": "3.3.1",
+    "vue": "^3.5.27",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/prismjs": "^1.26.4",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.49",
+    "tailwindcss": "3.4.17",
+    "tailwindcss-animate": "1.0.7",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1",
+    "vue-tsc": "^2.2.12"
+  }
+}

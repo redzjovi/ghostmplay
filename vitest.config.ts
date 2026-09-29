@@ -5,17 +5,15 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.spec.ts'],
+    include: ['apps/api/src/**/*.spec.ts', 'apps/web/src/**/*.spec.ts'],
     coverage: {
       provider: 'v8',
-      include: ['src/main/modules/marketplace/**/*', 'src/shared/**/*'],
+      include: ['apps/api/src/modules/marketplace/**/*', 'packages/shared/src/**/*'],
     },
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src/renderer/src'),
-      '@renderer': resolve(__dirname, 'src/renderer/src'),
-      '@shared': resolve(__dirname, 'src/shared'),
+      '@ghostmplay/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
     },
   },
 })
