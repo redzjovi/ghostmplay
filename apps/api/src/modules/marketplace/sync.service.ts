@@ -123,21 +123,22 @@ export class SyncService {
 
   /**
     * Scrap with sort=created_at_desc, limit 12 (offset=page).
-    * - latest: no limit page, break after found id+created_at same in DB
-    * - all: infinite until end (items.length < limit)
+    * - latest: break after found id+created_at same in DB
+    * - all: walk to the end (items.length < limit)
     * Fetch detail only for new or created_at-changed items, parallel limit 3.
+    *
+    * No page cap in either mode. The upstream returns an empty page past the end
+    * rather than clamping the offset, so `all` terminates on its own; and it is
+    * what keeps a long walk from overlapping with the next run.
     */
-  async refresh(opts: { itemName?: string; maxPages?: number; mode?: SyncMode } = {}) {
+  async refresh(opts: { itemName?: string; mode?: SyncMode } = {}) {
     const mode = opts.mode ?? 'latest'
     const limit = 12
     let page = 0
     let totalSynced = 0
-    let pages = 0
-    // latest: no limit page (infinite until break), all: infinite until end
     // offset = page per API (offset 0,1,2...), not item count
-    const maxPages = mode === 'latest' ? Number.MAX_SAFE_INTEGER : (opts.maxPages ?? Number.MAX_SAFE_INTEGER)
-
-    while (pages < maxPages) {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
       const logApi = process.env.LOG_API === '1' || process.env.TYPEORM_LOGGING === 'true' || process.env.LOG_QUERY === '1'
       if (logApi) this.logger.log(`[Sync] → searchRedis page=${page} mode=${mode} itemName=${opts.itemName ?? ''} limit=${limit}`)
       const res = await this.client.searchRedis({
@@ -208,7 +209,6 @@ export class SyncService {
         }
         const hasFetchedDetail = detailsMap.has(incomingId)
         const detail = hasFetchedDetail ? (detailsMap.get(incomingId) ?? null) : null
-        const sold = hasFetchedDetail ? detail === null : undefined // only set sold when we fetched detail (created_at change) per user #2
         const mapped = this.mapItem(it as SearchRedisItem, ipfsBase, detail)
         // Prepare detail payload for upsert (only attributes/datas/infos, mintTime moved to item)
         const detailPayload = detail
@@ -218,13 +218,17 @@ export class SyncService {
               infos: detail.viewData?.infos ?? null
             }
           : undefined
-        if (hasFetchedDetail && sold) {
-          this.logger.log(`[Sync] item ${incomingId} detail empty → sold=true`)
+        if (hasFetchedDetail && !detail) {
+          // Informational only. This used to mean "sold", which was wrong: the
+          // detail fetch swallows every error, so a 5xx, a 429 and a DNS failure
+          // all looked identical to a delisted token and were persisted as a sale.
+          // Sold state is now derived from the transfer ledger alone, in
+          // MarketplaceService.markItemsSold.
+          this.logger.log(`[Sync] item ${incomingId} detail empty (no sale inference)`)
         }
 
         await this.marketplace.upsertFromApi({
           ...mapped,
-          ...(sold !== undefined ? { sold } : {}),
           detail: detailPayload as never
         })
         totalSynced++
@@ -235,12 +239,11 @@ export class SyncService {
 
       // if less than limit, no more pages
       if (items.length < limit) {
-        this.logger.log(`Scrap done: last page ${pages} (page ${page}) with ${items.length} < ${limit}`)
+        this.logger.log(`Scrap done: last page ${page} with ${items.length} < ${limit}`)
         break
       }
 
       page += 1
-      pages++
     }
 
     this.logger.log(`Scrap finished: synced ${totalSynced} new items`)

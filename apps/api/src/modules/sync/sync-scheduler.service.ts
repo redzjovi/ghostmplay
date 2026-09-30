@@ -23,12 +23,27 @@ export class SyncSchedulerService {
 
   constructor(private readonly orchestrator: SyncOrchestratorService) {}
 
+  /**
+   * One incremental pass of each kind, in sequence: marketplace, then history.
+   *
+   * The order is a correctness requirement, not a preference. History derives
+   * sold state from the transfer ledger, and both history paths stop at the
+   * first transfer they already hold. So if history ran against a transfer whose
+   * item row the marketplace scraper had not inserted yet, the join would match
+   * nothing, and every later run would break on that same now-known transfer
+   * before ever retrying it — leaving the item live forever. Running the
+   * marketplace first means the row exists by the time history needs it.
+   */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'sync-latest' })
   async runLatest(): Promise<void> {
     for (const kind of SYNC_KINDS) {
       try {
         const { deduped } = await this.orchestrator.enqueue({ kind, mode: 'latest' })
         if (!deduped) this.logger.log(`Cron started incremental ${kind} sync`)
+        // Awaited so the next kind cannot start early. This also covers the
+        // deduped case: a tick that joined someone else's run waits for that run
+        // rather than racing ahead of it.
+        await this.orchestrator.settled(kind)
       } catch (err) {
         this.logger.error(`Cron ${kind} sync failed to start: ${(err as Error).message}`)
       }

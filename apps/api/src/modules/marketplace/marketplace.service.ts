@@ -23,11 +23,14 @@ export class MarketplaceService {
     const skip = (page - 1) * limit
 
     const qb = this.itemRepo.createQueryBuilder('item')
-    let hasWhere = false
+    // Live listings only. This must be the FIRST predicate: a later .where()
+    // resets the whole WHERE clause and discards it, so the `q` and filter
+    // blocks below have to use andWhere.
+    qb.where('item.soldAt IS NULL')
+    let hasWhere = true
     const qTrimmed = query.q?.trim()
     if (qTrimmed) {
-      qb.where('LOWER(item.name) LIKE LOWER(:q)', { q: `%${qTrimmed}%` })
-      hasWhere = true
+      qb.andWhere('LOWER(item.name) LIKE LOWER(:q)', { q: `%${qTrimmed}%` })
     }
 
     const normalizeMulti = (v: unknown): string[] | string | undefined => {
@@ -88,6 +91,14 @@ export class MarketplaceService {
     return { data, total, page, limit }
   }
 
+  /**
+   * Sold items are deliberately NOT filtered here.
+   *
+   * A token that exists in our DB has already been through the marketplace
+   * scraper, so a deep link to it must keep resolving — and rendering as
+   * "sold out" — rather than 404ing. browse() is where sold items stop being
+   * offered.
+   */
   async getByTokenId(tokenId: number) {
     const item = await this.itemRepo.findOne({ where: { tokenId } })
     if (!item) return null
@@ -106,6 +117,9 @@ export class MarketplaceService {
       .createQueryBuilder('item')
       .select('DISTINCT item.equipmentType', 'equipmentType')
       .where("item.equipmentType IS NOT NULL AND TRIM(item.equipmentType) != ''")
+      // Scoped to live listings, or the filter dropdowns keep offering
+      // equipment types and grade effects that nothing in the list can match.
+      .andWhere('item.soldAt IS NULL')
       .orderBy('item.equipmentType', 'ASC')
       .getRawMany()
     return rows.map((r) => r.equipmentType as string).filter(Boolean)
@@ -116,6 +130,7 @@ export class MarketplaceService {
       .createQueryBuilder('item')
       .select('DISTINCT item.gradeEffect', 'gradeEffect')
       .where("item.gradeEffect IS NOT NULL AND TRIM(item.gradeEffect) != ''")
+      .andWhere('item.soldAt IS NULL')
       .orderBy('item.gradeEffect', 'ASC')
       .getRawMany()
     return rows.map((r) => r.gradeEffect as string).filter(Boolean)
@@ -257,6 +272,72 @@ export class MarketplaceService {
     return this.toFavoriteDto(ent)
   }
 
+  /**
+   * Reconcile the item table against the transfer ledger: a token that appears
+   * in `marketplace_token_transfers` was sold, so its listing is over.
+   *
+   * Deliberately table-wide rather than scoped to the transfers a run just
+   * fetched. Both history paths stop early at the first transfer they already
+   * have — `refreshLatest` breaks on a known tx_hash — so a scope built from
+   * "the fresh ones" would silently never revisit a transfer whose item row did
+   * not exist yet at the time. Re-deriving from the whole ledger is a hash join
+   * on an indexed token_id that makes that class of miss unrepresentable.
+   *
+   * `sold_at IS NULL` does double duty: it makes the statement a no-op once a row
+   * is marked, and it pins sold_at to the first sale we ever observed rather
+   * than letting a later transfer overwrite it.
+   *
+   * The `t.created_at >= i.created_at` guard is what makes a relist survivable.
+   * A token that sold and was then relisted arrives as a new item_id for the same
+   * token, and upsertFromApi clears sold_at so the new listing is live again — but
+   * its previous sale is still in the ledger, and without the guard the very next
+   * run would re-sell the item using a transfer that predates the listing. The
+   * invariant is that sold_at can never be earlier than created_at.
+   */
+  async markItemsSold(): Promise<number> {
+    // RETURNING is what makes the count obtainable: through the pg driver an
+    // UPDATE without it hands back an empty row set, so `affected` would always
+    // read as 0 and the sync panel would report "0 sold" on every run.
+    const rows = await this.itemRepo.query(
+      `
+        UPDATE "marketplace_items" i
+        SET "sold_at" = t."created_at", "sold_price" = t."price"
+        FROM (
+            SELECT DISTINCT ON ("token_id") "token_id", "price", "created_at"
+            FROM "marketplace_token_transfers"
+            WHERE "price" > 0
+            ORDER BY "token_id", "created_at" DESC
+        ) t
+        WHERE i."token_id" = t."token_id"
+          AND i."sold_at" IS NULL
+          AND t."created_at" >= i."created_at"
+        RETURNING i."id"
+      `
+    )
+    return Array.isArray(rows) ? rows.length : 0
+  }
+
+  /**
+   * Deletes every listing, and every detail row with it.
+   *
+   * Counted inside the same transaction as the delete, so the numbers reported
+   * back are the rows that actually went rather than a count that could drift
+   * between two statements. `marketplace_item_detail` needs no explicit delete —
+   * its foreign key is ON DELETE CASCADE — but it is counted so the caller can say
+   * what disappeared.
+   *
+   * This is irreversible and there is no undo. A re-sync repopulates the table,
+   * but sold state is rebuilt from the transfer ledger rather than restored, so
+   * a listing that had sold is only marked again once history runs.
+   */
+  async clearAll(): Promise<{ items: number; details: number }> {
+    return this.itemRepo.manager.transaction(async (m) => {
+      const details = await m.count(MarketplaceItemDetailEntity)
+      const res = await m.createQueryBuilder().delete().from(MarketplaceItemEntity).execute()
+      return { items: res.affected ?? 0, details }
+    })
+  }
+
   async upsertFromApi(raw: {
     id: number // item_id reuse as PK per user
     tokenId: number
@@ -272,7 +353,6 @@ export class MarketplaceService {
     equipmentType: string
     createdAt: Date // timestamptz from created_at epoch == market_time (duplicate removed)
     mintTime?: Date | string | null // moved from detail to item
-    sold?: boolean
     detail?: {
       attributes?: unknown
       datas?: unknown
@@ -280,7 +360,15 @@ export class MarketplaceService {
     }
   }) {
     const mintTimeVal = raw.mintTime ? new Date(raw.mintTime as string) : null
+    // A relisted item comes back from the upstream with a NEW item_id but the SAME
+    // token_id, so looking up by id alone misses the existing row and the insert
+    // below trips the unique index on token_id. Matching on either key keeps the
+    // original row, which is what preserves its detail blob and sale history.
     let item = await this.itemRepo.findOne({ where: { id: raw.id } })
+    const relisted = !item && Number.isFinite(raw.tokenId)
+    if (relisted) {
+      item = await this.itemRepo.findOne({ where: { tokenId: raw.tokenId } })
+    }
     if (!item) {
       item = this.itemRepo.create({
         id: raw.id,
@@ -297,7 +385,10 @@ export class MarketplaceService {
         equipmentType: raw.equipmentType,
         createdAt: raw.createdAt,
         mintTime: mintTimeVal && !isNaN(mintTimeVal.getTime()) ? mintTimeVal : null,
-        sold: raw.sold ?? false
+        // A brand new row is live by definition; sold state arrives later, from
+        // the transfer ledger.
+        soldAt: null,
+        soldPrice: null
       })
     } else {
       Object.assign(item, {
@@ -314,7 +405,10 @@ export class MarketplaceService {
         equipmentType: raw.equipmentType,
         createdAt: raw.createdAt,
         ...(mintTimeVal && !isNaN(mintTimeVal.getTime()) ? { mintTime: mintTimeVal } : {}),
-        ...(raw.sold !== undefined ? { sold: raw.sold } : {})
+        // Only a row that is genuinely back on the market clears its sale. A
+        // plain re-scrape of a sold item keeps sold_at, otherwise every sync
+        // would resurrect it between the marketplace and history runs.
+        ...(relisted ? { soldAt: null, soldPrice: null } : {})
       })
     }
     item = await this.itemRepo.save(item)

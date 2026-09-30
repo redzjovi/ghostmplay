@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult } from '@/api/http-client'
+import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult, ClearSyncDataResult } from '@/api/http-client'
 import { useAuthStore } from './auth'
 
 /**
@@ -98,7 +98,6 @@ export const useSyncStore = defineStore('sync', () => {
     kind: SyncKind
     mode?: 'all' | 'latest' | 'full'
     itemName?: string
-    maxPages?: number
   }): Promise<EnqueueSyncResult> {
     loading.value = true
     error.value = null
@@ -106,6 +105,29 @@ export const useSyncStore = defineStore('sync', () => {
       const res = await window.api.admin.sync.enqueue(input)
       await refresh()
       schedule()
+      return res
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Deletes everything one kind of scraper owns. Irreversible.
+   *
+   * Not queued or retried: a failed clear is reported and stops, because a
+   * half-applied delete is not something to replay blindly. `refresh()` follows
+   * so the reset state — the row that said "done, 516 synced" over a table that
+   * no longer exists — reaches the cards straight away.
+   */
+  async function clear(kind: SyncKind): Promise<ClearSyncDataResult> {
+    loading.value = true
+    error.value = null
+    try {
+      const res = await window.api.admin.sync.clear({ kind, confirm: true })
+      await refresh()
       return res
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -126,5 +148,6 @@ export const useSyncStore = defineStore('sync', () => {
     start,
     stopPolling,
     enqueue,
+    clear,
   }
 })

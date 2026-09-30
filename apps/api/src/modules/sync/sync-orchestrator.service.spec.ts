@@ -57,14 +57,18 @@ function createOrchestrator(opts: { lockGranted?: boolean; throwOnRun?: boolean 
       rows.set(patch.kind, { ...makeState(), ...rows.get(patch.kind), ...patch })
       return { identifiers: [], generatedMaps: [], raw: [] }
     }),
-    update: vi.fn(async (_cond: unknown, patch: Row) => {
-      calls.push({ method: 'update', args: [_cond, patch] })
+    // `update(criteria, partial)` takes the criteria directly — unlike `find`,
+    // which wraps them in a `where` key. Honoured here so `update({kind}, …)`
+    // reaches a row whose runningSince is already null, and so boot recovery's
+    // Not(IsNull()) clause still spares the kind that was not running.
+    update: vi.fn(async (criteria: Row, patch: Row) => {
+      calls.push({ method: 'update', args: [criteria, patch] })
       let affected = 0
       for (const [kind, row] of rows) {
-        if (row.runningSince != null) {
-          rows.set(kind, { ...row, ...patch })
-          affected++
-        }
+        if ('kind' in criteria && criteria.kind !== kind) continue
+        if ('runningSince' in criteria && row.runningSince == null) continue
+        rows.set(kind, { ...row, ...patch })
+        affected++
       }
       return { affected, raw: [], generatedMaps: [] }
     }),
@@ -78,7 +82,10 @@ function createOrchestrator(opts: { lockGranted?: boolean; throwOnRun?: boolean 
   }
 
   const marketplaceSync = {
-    refresh: vi.fn(async () => {
+    // Required, not defaulted: the orchestrator always passes an options object,
+    // and a default would make the param optional, so call[0] would type as
+    // possibly-undefined in the dispatch tests below.
+    refresh: vi.fn(async (_opts: { mode?: string; itemName?: string }) => {
       if (opts.throwOnRun) throw new Error('upstream 500')
       return { synced: 7 }
     }),
@@ -88,11 +95,17 @@ function createOrchestrator(opts: { lockGranted?: boolean; throwOnRun?: boolean 
     refreshLatest: vi.fn(async () => ({ synced: 2, total: 5, enriched: 0, claimed: 1, skipped: 0 })),
   }
 
+  // clear() dispatches to the services that own each table, not to the scrapers.
+  const marketplace = { clearAll: vi.fn(async () => ({ items: 519, details: 488 })) }
+  const history = { clearAll: vi.fn(async () => ({ transfers: 8042 })) }
+
   const svc = new SyncOrchestratorService(
     stateRepo as never,
     lock as never,
     marketplaceSync as never,
-    historySync as never
+    historySync as never,
+    marketplace as never,
+    history as never
   )
 
   // enqueue() starts work with a fire-and-forget `void this.run(...)` holding the
@@ -107,7 +120,20 @@ function createOrchestrator(opts: { lockGranted?: boolean; throwOnRun?: boolean 
   const lastPatch = (): Record<string, unknown> =>
     (calls.at(-1)?.args.at(-1) as Record<string, unknown>) ?? {}
 
-  return { svc, runReal, runSpy, stateRepo, lock, marketplaceSync, historySync, rows, calls, lastPatch }
+  return {
+    svc,
+    runReal,
+    runSpy,
+    stateRepo,
+    lock,
+    marketplaceSync,
+    historySync,
+    marketplace,
+    history,
+    rows,
+    calls,
+    lastPatch,
+  }
 }
 
 describe('SyncOrchestratorService', () => {
@@ -156,12 +182,153 @@ describe('SyncOrchestratorService', () => {
       expect(h2.marketplaceSync.refresh).not.toHaveBeenCalled()
       expect(h2.runSpy).not.toHaveBeenCalled()
     })
+  })
 
-    it('carries maxPages through so a backfill stays bounded', async () => {
-      const opts = { kind: 'marketplace', mode: 'all', maxPages: 5 } as const
+  describe('settled', () => {
+    // What makes sequencing the two kinds possible: a caller that has just been
+    // deduped still needs a handle on the run it joined, or the scheduler cannot
+    // order history after marketplace.
+    it('is null when nothing is in flight', () => {
+      expect(h.svc.settled('marketplace')).toBeNull()
+    })
+
+    it('resolves once the run it started has finished', async () => {
+      await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+      const p = h.svc.settled('marketplace')
+      expect(p).not.toBeNull()
+      await expect(p).resolves.toBeUndefined()
+    })
+
+    it('does not resolve while the run is still going', async () => {
+      let release!: () => void
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      h.svc.run = vi.fn(async () => {
+        await gate
+      }) as unknown as typeof h.svc.run
+      await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+
+      let done = false
+      const waiter = h.svc.settled('marketplace')!.then(() => {
+        done = true
+      })
+      await Promise.resolve()
+      expect(done).toBe(false)
+
+      release()
+      await waiter
+      expect(done).toBe(true)
+    })
+
+    it('hands back the run a deduplicated trigger joined', async () => {
+      let release!: () => void
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      h.svc.run = vi.fn(async () => {
+        await gate
+      }) as unknown as typeof h.svc.run
+      await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+      const second = await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+      expect(second.deduped).toBe(true)
+
+      const p = h.svc.settled('marketplace')
+      expect(p).not.toBeNull()
+      release()
+      await expect(p).resolves.toBeUndefined()
+    })
+
+    it('resolves rather than rejecting when the scrape itself fails', async () => {
+      // The invariant the scheduler's bare `await` relies on. Driven through the
+      // real run(): it catches the failure into finish('failed'), so the gate can
+      // never surface a rejection to the caller.
+      const failing = createOrchestrator({ throwOnRun: true })
+      failing.svc.run = failing.runReal
+      await failing.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+      await expect(failing.svc.settled('marketplace')).resolves.toBeUndefined()
+      expect(failing.rows.get('marketplace')?.lastStatus).toBe('failed')
+    })
+
+    it('tracks each kind separately', async () => {
+      await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
+      await h.svc.enqueue({ kind: 'history', mode: 'latest' })
+      expect(h.svc.settled('marketplace')).not.toBeNull()
+      expect(h.svc.settled('history')).not.toBeNull()
+    })
+  })
+
+  describe('clear', () => {
+    it('deletes marketplace rows and reports the counts', async () => {
+      const res = await h.svc.clear('marketplace')
+      expect(h.marketplace.clearAll).toHaveBeenCalledTimes(1)
+      expect(h.history.clearAll).not.toHaveBeenCalled()
+      expect(res).toEqual({ kind: 'marketplace', deleted: { items: 519, details: 488 } })
+    })
+
+    it('deletes history rows and reports the count', async () => {
+      const res = await h.svc.clear('history')
+      expect(h.history.clearAll).toHaveBeenCalledTimes(1)
+      expect(h.marketplace.clearAll).not.toHaveBeenCalled()
+      expect(res).toEqual({ kind: 'history', deleted: { transfers: 8042 } })
+    })
+
+    it('takes the same lock a scrape would, so the two cannot overlap', async () => {
+      await h.svc.clear('marketplace')
+      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace', expect.any(Number))
+    })
+
+    it('refuses while that kind is in flight in this process', async () => {
+      // The delete must not race an in-flight insert, or the table ends up
+      // half-repopulated by the run that was already writing to it.
+      const run = h.svc.run.bind(h.svc)
+      const opts = { kind: 'marketplace', mode: 'latest' } as const
       await h.svc.enqueue(opts)
-      await h.runReal(opts, { release: async () => undefined })
-      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith(expect.objectContaining({ mode: 'all', maxPages: 5 }))
+      // enqueue registered the kind as in-flight before its fire-and-forget run.
+      await expect(h.svc.clear('marketplace')).rejects.toThrow(/in progress/)
+      expect(h.marketplace.clearAll).not.toHaveBeenCalled()
+      await run(opts, { release: async () => undefined })
+    })
+
+    it('refuses when the lock is held elsewhere, and does not delete', async () => {
+      const h2 = createOrchestrator({ lockGranted: false })
+      await expect(h2.svc.clear('history')).rejects.toThrow(/in progress elsewhere/)
+      expect(h2.history.clearAll).not.toHaveBeenCalled()
+    })
+
+    it('releases the lock even when the delete throws', async () => {
+      const h2 = createOrchestrator()
+      const lock = { release: vi.fn(async () => undefined) }
+      h2.lock.acquire.mockResolvedValue(lock as never)
+      h2.marketplace.clearAll.mockRejectedValue(new Error('deadlock detected'))
+      await expect(h2.svc.clear('marketplace')).rejects.toThrow('deadlock detected')
+      expect(lock.release).toHaveBeenCalled()
+    })
+
+    it('resets the stored state so it stops describing a table that is gone', async () => {
+      // Otherwise the Data page keeps reporting "done, 516 synced" over an
+      // empty result.
+      await h.svc.enqueue({ kind: 'marketplace', mode: 'all' })
+      await h.runReal({ kind: 'marketplace', mode: 'all' } as const, { release: async () => undefined })
+      expect(h.rows.get('marketplace')?.lastStatus).toBe('done')
+
+      await h.svc.clear('marketplace')
+      const row = h.rows.get('marketplace')!
+      expect(row.lastStatus).toBeNull()
+      expect(row.lastFinishedAt).toBeNull()
+      expect(row.lastStats).toBeNull()
+      expect(row.lastError).toBeNull()
+      // kind and mode survive, so the row is still addressable.
+      expect(row.kind).toBe('marketplace')
+      expect(row.mode).toBe('all')
+    })
+
+    it('leaves the other kind\'s state alone', async () => {
+      await h.svc.enqueue({ kind: 'history', mode: 'full' })
+      await h.runReal({ kind: 'history', mode: 'full' } as const, { release: async () => undefined })
+      await h.svc.clear('marketplace')
+      expect(h.rows.get('history')?.lastStatus).toBe('done')
+      expect(h.rows.get('history')?.lastStats).not.toBeNull()
     })
   })
 
@@ -185,8 +352,9 @@ describe('SyncOrchestratorService', () => {
     it('gives a backfill a TTL long enough to outlive it', async () => {
       await h.svc.enqueue({ kind: 'history', mode: 'full' })
       const ttl = h.lock.acquire.mock.calls[0][1] as number
-      // A 200-page backfill is minutes, not seconds; a 1-hour TTL could expire
-      // mid-run and let a second scrape start.
+      // The TTL is a backstop for a dead process, not a budget: LockService renews
+      // it while the lock is held. It still has to comfortably cover a full history
+      // backfill, so that even a broken renewal leaves the common case finishing.
       expect(ttl).toBeGreaterThanOrEqual(3600)
     })
   })
@@ -248,25 +416,49 @@ describe('SyncOrchestratorService', () => {
   })
 
   describe('execute dispatch', () => {
-    it('marketplace + all → refresh({mode:all}) with the page cap', async () => {
-      const opts = { kind: 'marketplace', mode: 'all', maxPages: 7 } as const
+    it('marketplace + all → refresh({mode:all}) with no page cap', async () => {
+      const opts = { kind: 'marketplace', mode: 'all' } as const
       await h.svc.enqueue(opts)
       await h.runReal(opts, { release: async () => undefined })
-      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith(expect.objectContaining({ mode: 'all', maxPages: 7 }))
+      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith({ mode: 'all', itemName: undefined })
     })
 
-    it('marketplace + latest → no page cap (it stops on its own)', async () => {
+    it('marketplace + latest → refresh({mode:latest})', async () => {
       const opts = { kind: 'marketplace', mode: 'latest' } as const
       await h.svc.enqueue(opts)
       await h.runReal(opts, { release: async () => undefined })
-      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith(expect.objectContaining({ maxPages: undefined }))
+      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith({ mode: 'latest', itemName: undefined })
     })
 
-    it('history + full → backfill with the page cap', async () => {
-      const opts = { kind: 'history', mode: 'full', maxPages: 4 } as const
+    it('never passes a page cap to either scraper', async () => {
+      // The cap is gone: both scrapers walk to the upstream's natural end, and the
+      // self-renewing lock is what stops a long walk from overlapping the next run.
+      const mkt = { kind: 'marketplace', mode: 'all' } as const
+      await h.svc.enqueue(mkt)
+      await h.runReal(mkt, { release: async () => undefined })
+      for (const call of h.marketplaceSync.refresh.mock.calls) {
+        expect(Object.keys(call[0])).not.toContain('maxPages')
+      }
+
+      const h2 = createOrchestrator()
+      const hist = { kind: 'history', mode: 'full' } as const
+      await h2.svc.enqueue(hist)
+      await h2.runReal(hist, { release: async () => undefined })
+      expect(h2.historySync.backfill).toHaveBeenCalledWith()
+    })
+
+    it('marketplace + all → passes the item name filter through', async () => {
+      const opts = { kind: 'marketplace', mode: 'all', itemName: 'Gold Box' } as const
       await h.svc.enqueue(opts)
       await h.runReal(opts, { release: async () => undefined })
-      expect(h.historySync.backfill).toHaveBeenCalledWith({ maxPages: 4 })
+      expect(h.marketplaceSync.refresh).toHaveBeenCalledWith({ mode: 'all', itemName: 'Gold Box' })
+    })
+
+    it('history + full → backfill', async () => {
+      const opts = { kind: 'history', mode: 'full' } as const
+      await h.svc.enqueue(opts)
+      await h.runReal(opts, { release: async () => undefined })
+      expect(h.historySync.backfill).toHaveBeenCalledWith()
       expect(h.historySync.refreshLatest).not.toHaveBeenCalled()
     })
 

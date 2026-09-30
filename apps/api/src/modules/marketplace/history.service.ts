@@ -5,12 +5,22 @@ import { MarketplaceTokenTransferEntity } from './entities/marketplace-token-tra
 import { UserEntity, normalizeAddress } from './entities/user.entity'
 import type { HistoryListQuery, MarketplaceTokenTransfer } from '@ghostmplay/shared'
 
+/**
+ * The transfer log's `time` field arrives as a bare `"2026-09-25 01:45:59"` with
+ * no offset, and it is KST — the market's own clock, the same one `item-detail`
+ * spells out as `+0900 KST` in its `mintTime`.
+ *
+ * Appending `Z` here would store every transfer 9 hours in the future, which is
+ * self-evidently wrong: the newest transfer then reads as later than "now". The
+ * offset is only defaulted when the payload omits one, because some responses do
+ * carry it and those must win — a bare `Z` counts as carried, which is why the
+ * pattern matches the designator as well as a numeric offset. Korea does not
+ * observe DST, so +09:00 all year is the whole rule.
+ */
 export function parseTransferTime(s: string): Date {
-  // API: "2026-09-25 01:45:59" — treat as UTC ("2026-09-25T01:45:59Z")
   const t = s.trim().replace(' ', 'T')
-  const withZ = /[Z+-]\d{2}:?\d{2}$/.test(t) ? t : `${t}Z`
-  const d = new Date(withZ)
-  return d
+  const withZone = /(Z|[+-]\d{2}:?\d{2})$/.test(t) ? t : `${t}+09:00`
+  return new Date(withZone)
 }
 
 function toDto(
@@ -177,6 +187,27 @@ export class HistoryService {
 
   async existsByTxHash(txHash: string): Promise<boolean> {
     return (await this.transferRepo.count({ where: { txHash } as never })) > 0
+  }
+
+  /**
+   * Deletes every transfer. Irreversible, with no undo.
+   *
+   * `users` is deliberately left alone: the seller/buyer names are harmless
+   * without transfers behind them, and they are cheap for a backfill to restore.
+   * Only the ledger itself goes.
+   *
+   * Worth knowing before using this: the cron only ever fetches the first page,
+   * so a cleared ledger does NOT refill on its own the way the marketplace does.
+   * Rebuilding it is a full backfill over every page the upstream holds, which is
+   * the single most expensive operation in the app.
+   */
+  async clearAll(): Promise<{ transfers: number }> {
+    const res = await this.transferRepo
+      .createQueryBuilder()
+      .delete()
+      .from(MarketplaceTokenTransferEntity)
+      .execute()
+    return { transfers: res.affected ?? 0 }
   }
 
   async getDistinctGameNames(): Promise<string[]> {

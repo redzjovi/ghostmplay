@@ -2,19 +2,9 @@
   <div class="p-5 space-y-3">
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <h2 class="text-2xl font-semibold">History</h2>
-      <div class="flex items-center gap-2">
-        <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
-        <template v-if="sync.isAdmin">
-          <Button variant="outline" :disabled="hist.running || sync.loading" @click="triggerSync('latest')">
-            <Loader2 v-if="hist.running && hist.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ hist.running && hist.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
-          </Button>
-          <Button :disabled="hist.running || sync.loading" @click="triggerSync('full')">
-            <Loader2 v-if="hist.running && hist.mode==='full'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ hist.running && hist.mode==='full' ? 'Syncing…' : 'Sync Full' }}
-          </Button>
-        </template>
-      </div>
+      <!-- Passive only. The sync controls live on the admin Data page; this stays so
+           an admin who kicked off a run still sees the data moving. -->
+      <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
     </div>
 
     <!-- Filters -->
@@ -170,7 +160,7 @@
       </Select>
     </div>
 
-    <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="lastSynced!==null"> · Last sync ({{ lastMode }}): {{ lastSynced }} new</span><span v-if="lastEnriched!==null"> · Enriched {{ lastEnriched }}, claimed {{ lastClaimed }}</span> · Page {{ page }}/{{ totalPages }}</p>
+    <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="hist.lastSynced!==null"> · Last sync ({{ syncModeLabel(hist.mode) }}): {{ hist.lastSynced }} new</span><span v-if="lastEnriched!==null"> · Enriched {{ lastEnriched }}, claimed {{ lastClaimed }}</span> · Page {{ page }}/{{ totalPages }}</p>
 
     <div class="border rounded-lg overflow-x-auto">
       <table class="w-full text-sm">
@@ -188,7 +178,7 @@
             <td colspan="5" class="px-3 py-8 text-center text-muted-foreground"><Loader2 class="mx-auto mb-2 h-6 w-6 animate-spin" /> Loading…</td>
           </tr>
           <tr v-else-if="!(store.items as Row[]).length">
-            <td colspan="5" class="px-3 py-8 text-center text-muted-foreground">{{ sync.isAdmin ? 'No transfers yet. Run Sync Full.' : 'No transfers synced yet.' }}</td>
+            <td colspan="5" class="px-3 py-8 text-center text-muted-foreground">No transfers synced yet. An admin can start a run from the Data page.</td>
           </tr>
           <tr v-for="t in (store.items as Row[])" :key="t.id" class="border-t hover:bg-muted/30">
             <td class="px-3 py-2">
@@ -232,7 +222,7 @@
                 <span class="text-xs font-normal text-muted-foreground">{{ t.currency }}</span>
               </span>
             </td>
-            <td class="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">{{ formatDate(t.createdAt) }}</td>
+            <td class="px-3 py-2 whitespace-nowrap text-xs text-muted-foreground">{{ formatDateTime(t.createdAt) }}</td>
           </tr>
         </tbody>
       </table>
@@ -265,7 +255,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { useHistoryStore } from '@/stores/history'
 import { useSyncStore } from '@/stores/sync'
-import { formatPrice } from '@/lib/format'
+import { statOf } from '@/lib/syncPanel'
+import { formatDateTime, formatPrice } from '@/lib/format'
 
 const NUMI_ICON_URL = 'https://market.numine.io/images/market/icon_numi.png'
 function isNUMI(currency?: string | number | null): boolean {
@@ -343,14 +334,21 @@ const storedLimit = Number(route.query.limit ?? localStorage.getItem('ghostmplay
 const limit = ref(PAGE_SIZES.includes(Number.isFinite(storedLimit) ? storedLimit : 15) ? (Number.isFinite(storedLimit) ? storedLimit : 15) : 15)
 
 // Sync runs in the background server-side and is admin-only; see stores/sync.ts.
-// Only this page's kind is bound here, so a marketplace sync neither disables these
-// buttons nor reports its item count as history's.
+// The controls live on the admin Data page. This view only reads its own kind's
+// status, so a marketplace sync neither shows up here nor reports its item count
+// as history's.
 const sync = useSyncStore()
 const hist = computed(() => sync.forKind('history'))
-const lastSynced = ref<number|null>(null)
-const lastMode = ref<string|null>(null)
-const lastEnriched = ref<number|null>(null)
-const lastClaimed = ref<number|null>(null)
+// Read from the store rather than snapshotted after a self-triggered run, so the
+// numbers are current no matter who started it.
+const lastEnriched = computed(() => statOf(hist.value, 'enriched'))
+const lastClaimed = computed(() => statOf(hist.value, 'claimed'))
+
+function syncModeLabel(mode: string | null | undefined): string {
+  if (mode === 'full') return 'Full'
+  if (mode === 'latest') return 'Latest'
+  return ''
+}
 
 function shortAddr(a: string): string {
   if (!a) return '—'
@@ -377,16 +375,6 @@ function openPreview(tokenId: number, itemName: string) {
   previewTokenId.value = tokenId
   previewFallback.value = { name: itemName }
   previewOpen.value = true
-}
-function formatDate(iso: string): string {
-  try {
-    const d = new Date(iso)
-    if (isNaN(d.getTime())) return iso
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC+0`
-  } catch {
-    return iso
-  }
 }
 
 function buildQuery(): HistoryListQuery {
@@ -443,41 +431,6 @@ function clearFilters() {
   load(1)
 }
 
-async function triggerSync(mode: 'full'|'latest') {
-  if (hist.value.running) return
-  try {
-    await sync.enqueue({ kind: 'history', mode })
-    watchForSyncResult(mode)
-  } catch (e) {
-    console.error('sync enqueue failed', e)
-  }
-}
-
-/** Waits for the run to finish, then refreshes the visible data. */
-function watchForSyncResult(mode: 'full'|'latest') {
-  const startedAt = Date.now()
-  const timer = setInterval(async () => {
-    await sync.refresh()
-    const kind = hist.value
-    const finished = kind.lastFinishedAt ? Date.parse(kind.lastFinishedAt) : 0
-    // Stop when this kind reports done, or after a hard ceiling.
-    if ((!kind.running && finished >= startedAt) || Date.now() - startedAt > 10 * 60 * 1000) {
-      clearInterval(timer)
-      // Only adopt the numbers if this row's run finished after we asked for it,
-      // so a stale timestamp from a previous sync is not reported as fresh.
-      if (finished >= startedAt) {
-        const stats = kind.lastStats
-        lastSynced.value = kind.lastSynced
-        lastMode.value = mode
-        lastEnriched.value = typeof stats?.enriched === 'number' ? stats.enriched : null
-        lastClaimed.value = typeof stats?.claimed === 'number' ? stats.claimed : null
-        await store.fetchFilterOptions(true)
-        await load(page.value)
-      }
-    }
-  }, 3000)
-}
-
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / limit.value)))
 const pageNumbers = computed<(number|string)[]>(() => {
   const total = totalPages.value
@@ -501,7 +454,7 @@ const lastSyncedLabel = computed(() => {
   const at = hist.value.lastFinishedAt
   if (!at) return 'Not synced yet'
   const n = hist.value.lastSynced
-  return `Last sync: ${new Date(at).toLocaleString()}${n === null ? '' : ` · ${n} new`}`
+  return `Last sync: ${formatDateTime(at)}${n === null ? '' : ` · ${n} new`}`
 })
 
 onMounted(async () => {

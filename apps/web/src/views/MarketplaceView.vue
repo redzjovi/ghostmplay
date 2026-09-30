@@ -2,19 +2,9 @@
   <div class="p-5 space-y-3">
     <div class="flex items-center justify-between gap-3">
       <h2 class="text-2xl font-semibold">Marketplace</h2>
-      <div class="flex items-center gap-2">
-        <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
-        <template v-if="sync.isAdmin">
-          <Button variant="outline" :disabled="mkt.running || sync.loading" @click="triggerSync('latest')">
-            <Loader2 v-if="mkt.running && mkt.mode==='latest'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ mkt.running && mkt.mode==='latest' ? 'Syncing…' : 'Sync Latest' }}
-          </Button>
-          <Button :disabled="mkt.running || sync.loading" @click="triggerSync('all')">
-            <Loader2 v-if="mkt.running && mkt.mode==='all'" class="mr-2 h-4 w-4 animate-spin" />
-            {{ mkt.running && mkt.mode==='all' ? 'Syncing…' : 'Sync Full' }}
-          </Button>
-        </template>
-      </div>
+      <!-- Passive only. The sync controls live on the admin Data page; this stays so
+           an admin who kicked off a run still sees the data moving. -->
+      <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
     </div>
 
     <!-- Browse view (menu List) -->
@@ -130,7 +120,7 @@
         <Alert v-if="sync.error" variant="destructive" class="py-2">
           <AlertDescription>{{ sync.error }}</AlertDescription>
         </Alert>
-        <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="lastSynced!==null"> · Last sync ({{ syncModeLabel(lastMode) }}): {{ lastSynced }} new</span> · Page {{ page }}/{{ totalPages }}</p>
+        <p class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }}<span v-if="mkt.lastSynced!==null"> · Last sync ({{ syncModeLabel(mkt.mode) }}): {{ mkt.lastSynced }} new</span> · Page {{ page }}/{{ totalPages }}</p>
 
         <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
           <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
@@ -356,7 +346,7 @@
           <div v-else class="grid gap-2 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
             <Card v-for="fav in favStore.favorites" :key="fav.id" class="px-2.5 py-2 flex flex-col gap-1">
               <button class="text-left text-sm font-medium truncate hover:underline hover:text-primary" :title="fav.name" @click="viewFavorite(fav)">{{ fav.name }}</button>
-              <div class="text-[11px] text-muted-foreground leading-none">{{ new Date(fav.createdAt).toLocaleString() }}</div>
+              <div class="text-[11px] text-muted-foreground leading-none">{{ formatDateTime(fav.createdAt) }}</div>
               <div class="flex flex-col gap-0.5 text-xs leading-tight pt-0.5">
                 <div class="truncate"><span class="text-muted-foreground">Equipment type:</span> {{ fav.equipmentTypes.length ? fav.equipmentTypes.join(', ') : '—' }}</div>
                 <div class="truncate"><span class="text-muted-foreground">Grade effect:</span> {{ fav.gradeEffects.length ? fav.gradeEffects.join(', ') : '—' }}</div>
@@ -426,7 +416,7 @@ import { useSyncStore } from '@/stores/sync'
 import type { GradeEffect, MarketplaceFavorite } from '@ghostmplay/shared'
 import ItemPreviewDialog from '@/components/ItemPreviewDialog.vue'
 import AddFavoriteDialog from '@/components/AddFavoriteDialog.vue'
-import { formatPrice } from '@/lib/format'
+import { formatDateTime, formatPrice } from '@/lib/format'
 
 const NUMI_ICON_URL = 'https://market.numine.io/images/market/icon_numi.png'
 function isNUMI(currency?: string | number | null): boolean {
@@ -442,7 +432,7 @@ function normalizeImageUrl(raw: string): string {
   if (/^https?:\/\//.test(raw) || raw.startsWith('data:')) return raw
   return raw
 }
-type Item = { tokenId:number; name:string; imageUrl:string; equipmentType:string; level:number; enchant:number; gradeEffect:string; price:number; currency:string; mintTime?: string | null; createdAt?: string | null; sold?: boolean }
+type Item = { tokenId:number; name:string; imageUrl:string; equipmentType:string; level:number; enchant:number; gradeEffect:string; price:number; currency:string; mintTime?: string | null; createdAt?: string | null; soldAt?: string | null; soldPrice?: number | null }
 const store = useMarketplaceStore()
 const favStore = useFavoritesStore()
 // Browsing is public; favorites are per-account. `next` returns the visitor to
@@ -456,7 +446,9 @@ function onImageError(e: Event, key: string) { errorImages.value = new Set(error
 function hasImage(it: Item): boolean { return !!normalizeImageUrl(it.imageUrl) }
 function imageLoaded(key: string): boolean { return loadedImages.value.has(key) }
 function imageFailed(key: string): boolean { return errorImages.value.has(key) }
-function isSoldOut(it: Item): boolean { return !!it.sold }
+// Grid cards only ever come from the list endpoint, which already excludes sold
+// items, so there is no fallback here — soldAt should be null for everything shown.
+function isSoldOut(it: Item): boolean { return it.soldAt != null }
 function favSortLabel(s:string){ if(s==='price_asc') return 'Price low → high'; if(s==='price_desc') return 'Price high → low'; return 'Recently registered' }
 function encodeBackUrl(fullPath: string): string {
   try { return btoa(encodeURIComponent(fullPath)) } catch { try { return btoa(fullPath) } catch { return '' } }
@@ -508,12 +500,11 @@ const sort = ref<'recent' | 'price_asc' | 'price_desc'>(
 const page = ref<number>(Number(route.query.page) || 1)
 
 // Sync runs in the background server-side and is admin-only; see stores/sync.ts.
-// Only this page's kind is bound here, so a history backfill neither disables these
-// buttons nor reports its item count as the marketplace's.
+// The controls live on the admin Data page. This view only reads its own kind's
+// status, so a history backfill neither shows up here nor reports its item count
+// as the marketplace's.
 const sync = useSyncStore()
 const mkt = computed(() => sync.forKind('marketplace'))
-const lastSynced = ref<number | null>(null)
-const lastMode = ref<'all' | 'latest' | null>(null)
 const PAGE_SIZES = [12, 24, 48, 96]
 const storedLimit = Number(route.query.limit ?? localStorage.getItem('ghostmplay:marketplace:limit') ?? 12)
 const initialLimit = Number.isFinite(storedLimit) ? storedLimit : 12
@@ -677,43 +668,14 @@ async function load(p = page.value) {
     limit: limit.value,
   })
 }
-async function triggerSync(mode: 'all' | 'latest' = 'latest') {
-  if (mkt.value.running) return
-  try {
-    await sync.enqueue({ kind: 'marketplace', mode, itemName: q.value || undefined })
-    // The scrape runs server-side; reload this page once the run reports done.
-    watchForSyncResult(mode)
-  } catch (e) {
-    console.error('sync enqueue failed', e)
-  }
-}
-
-/** Waits for the run to finish, then refreshes the visible data. */
-function watchForSyncResult(mode: 'all' | 'latest') {
-  const startedAt = Date.now()
-  const timer = setInterval(async () => {
-    await sync.refresh()
-    const kind = mkt.value
-    // Stop once this kind stops running, or after a hard ceiling.
-    if ((!kind.running && Date.now() - startedAt > 1000) || Date.now() - startedAt > 10 * 60 * 1000) {
-      clearInterval(timer)
-      // Only adopt the numbers if this row's run finished after we asked for it,
-      // so a stale timestamp from a previous sync is not reported as fresh.
-      if (kind.lastFinishedAt && Date.parse(kind.lastFinishedAt) >= startedAt) {
-        lastSynced.value = kind.lastSynced
-        lastMode.value = mode
-        await store.fetchFilterOptions(true)
-        pruneSelections()
-        await load(page.value)
-      }
-    }
-  }, 3000)
-}
+// Read straight from the sync store rather than snapshotting after a self-triggered
+// run: the store already polls while anything is in flight, so this is current
+// whether the run was started here, on the Data page, or by the cron.
 const lastSyncedLabel = computed(() => {
   const at = mkt.value.lastFinishedAt
   if (!at) return 'Not synced yet'
   const n = mkt.value.lastSynced
-  return `Last sync: ${new Date(at).toLocaleString()}${n === null ? '' : ` · ${n} new`}`
+  return `Last sync: ${formatDateTime(at)}${n === null ? '' : ` · ${n} new`}`
 })
 
 function syncModeLabel(mode: string | null | undefined): string {

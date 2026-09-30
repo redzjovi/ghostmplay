@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { GhostMarketplaceClient, TokenTransferItem } from './api/ghost-marketplace.client'
 import { HistoryService, parseTransferTime } from './history.service'
+import { MarketplaceService } from './marketplace.service'
 
 async function pool<T, R>(limit: number, items: T[], fn: (item: T) => Promise<R>): Promise<Map<T, R | null>> {
   const results = new Map<T, R | null>()
@@ -38,8 +39,23 @@ export class HistorySyncService {
 
   constructor(
     @Inject(GhostMarketplaceClient) private readonly client: GhostMarketplaceClient,
-    @Inject(HistoryService) private readonly history: HistoryService
+    @Inject(HistoryService) private readonly history: HistoryService,
+    @Inject(MarketplaceService) private readonly marketplace: MarketplaceService
   ) {}
+
+  /**
+   * Reconcile sold state once a run has stored everything it fetched.
+   *
+   * The join re-reads the whole transfer ledger rather than the transfers this
+   * run happened to fetch, so it runs at the end of a run rather than per page:
+   * it is one statement, and it converges on the ledger regardless of which
+   * early-break path got us here.
+   */
+  private async reconcileSold(): Promise<number> {
+    const marked = await this.marketplace.markItemsSold()
+    if (marked > 0) this.logger.log(`[HistorySync] marked ${marked} item(s) sold from the transfer ledger`)
+    return marked
+  }
 
   mapItem(it: TokenTransferItem) {
     return {
@@ -78,19 +94,23 @@ export class HistorySyncService {
     }
   }
 
-  /** Full backfill: offset is a 0-based page index (0 = page 1), like search-redis. Only GhostMGlobal transfers are saved. */
-  async backfill(opts: { limit?: number; concurrency?: number; maxPages?: number } = {}) {
+  /**
+   * Full backfill: offset is a 0-based page index (0 = page 1), like search-redis.
+   * Only GhostMGlobal transfers are saved.
+   *
+   * No page cap. This endpoint reports a real `count`, so the walk stops once it has
+   * covered all of it, and returns a short page at the end as a second signal. The
+   * lock is what stops a long walk from overlapping with the next run, and it renews
+   * itself for as long as this holds it.
+   */
+  async backfill(opts: { limit?: number; concurrency?: number } = {}) {
     const limit = opts.limit ?? 150
     const concurrency = opts.concurrency ?? 3
-    // A full scan of the upstream API is unbounded by nature. Cap it so a single
-    // admin click cannot monopolise a small shared box indefinitely.
-    const maxPages = opts.maxPages ?? 200
     let page = 0
     let synced = 0
     let enriched = 0
     let claimed = 0
     let skipped = 0
-    let truncated = false
     let total = Number.MAX_SAFE_INTEGER
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -110,15 +130,11 @@ export class HistorySyncService {
         if (r.claimed) claimed++
       }
       page += 1
-      this.logger.log(`[HistorySync] backfill page=${page}/${maxPages} synced=${synced}/${total} skipped=${skipped}`)
+      this.logger.log(`[HistorySync] backfill page=${page} synced=${synced}/${total} skipped=${skipped}`)
       if (lists.length < limit || page * limit >= total) break
-      if (page >= maxPages) {
-        truncated = true
-        this.logger.warn(`[HistorySync] backfill stopped at page cap ${maxPages} with ${synced}/${total} synced`)
-        break
-      }
     }
-    return { synced, total, enriched, claimed, skipped, truncated, pages: page }
+    const soldMarked = await this.reconcileSold()
+    return { synced, total, enriched, claimed, skipped, soldMarked, pages: page }
   }
 
   /** Latest: fetch first page only, stop at first known txHash. Only GhostMGlobal transfers are saved. */
@@ -154,6 +170,7 @@ export class HistorySyncService {
       if (r.buyerUsername) enriched++
       if (r.claimed) claimed++
     }
-    return { synced, total: Number(res.count ?? 0), enriched, claimed, skipped }
+    const soldMarked = await this.reconcileSold()
+    return { synced, total: Number(res.count ?? 0), enriched, claimed, skipped, soldMarked }
   }
 }

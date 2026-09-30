@@ -1,27 +1,31 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { IsNull, Not, Repository, type QueryDeepPartialEntity } from 'typeorm'
 import { SyncStateEntity, SYNC_KINDS, type SyncKind, type SyncMode, type SyncStatus } from './entities'
 import { LockService, type Lock } from '../../common/lock.service'
 import { SyncService } from '../marketplace/sync.service'
 import { HistorySyncService } from '../marketplace/history-sync.service'
+import { MarketplaceService } from '../marketplace/marketplace.service'
+import { HistoryService } from '../marketplace/history.service'
 import { describeError, isTransientError } from './transient'
 
-/** A backfill is a long unbounded scrape; the TTL must outlive a normal run. */
+/**
+ * The TTL on a lock is a backstop for a process that dies, not a budget for a
+ * run's duration. LockService renews it while the lock is held, so a backfill may
+ * take as long as the upstream makes it take without a second scrape starting
+ * underneath it. It is sized to comfortably outlive a full history backfill, so
+ * that even if renewal were ever broken the common case still finishes in time.
+ */
 const LOCK_TTL_SECONDS = 7200
 
 /** Transient-failure budget. Kept small: a real outage should fail visibly, not hang. */
 const MAX_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 2000
 
-/** Guard rail for a backfill. The upstream API has no natural end. */
-const DEFAULT_MAX_PAGES = 200
-
 export interface EnqueueOptions {
   kind: SyncKind
   mode: SyncMode
   itemName?: string
-  maxPages?: number
 }
 
 export interface EnqueueResult {
@@ -30,6 +34,12 @@ export interface EnqueueResult {
   kind: SyncKind
   mode: SyncMode
   runningSince: string | null
+}
+
+/** Per-kind row counts, so the caller can report what actually disappeared. */
+export type ClearResult = {
+  kind: SyncKind
+  deleted: { items: number; details: number } | { transfers: number }
 }
 
 export interface SyncKindStatus {
@@ -70,14 +80,23 @@ export interface SyncStatusSnapshot {
 @Injectable()
 export class SyncOrchestratorService implements OnApplicationBootstrap {
   private readonly logger = new Logger(SyncOrchestratorService.name)
-  private readonly inflight = new Set<SyncKind>()
+  /**
+   * Kind -> the run currently holding it. The key set doubles as the in-process
+   * dedupe check (`has`), and the value lets a caller await a run that has
+   * already started, which is what makes sequencing the kinds possible.
+   */
+  private readonly inflight = new Map<SyncKind, Promise<void>>()
 
   constructor(
     @InjectRepository(SyncStateEntity)
     private readonly stateRepo: Repository<SyncStateEntity>,
     private readonly lock: LockService,
     private readonly marketplaceSync: SyncService,
-    private readonly historySync: HistorySyncService
+    private readonly historySync: HistorySyncService,
+    // Only for clear(): each scraper owns the table it writes, so each service
+    // deletes its own rather than the orchestrator reaching into both repos.
+    private readonly marketplace: MarketplaceService,
+    private readonly history: HistoryService
   ) {}
 
   /**
@@ -138,7 +157,15 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
     }
 
     const startedAt = new Date()
-    this.inflight.add(kind)
+    // Registered before any await, exactly where `inflight.add` used to sit, so
+    // the window in which a same-process trigger is deduped is unchanged. The
+    // deferred is resolved by the run itself; capturing run()'s promise directly
+    // would require moving the state upsert into run(), which the specs stub out.
+    let resolveDone!: () => void
+    const settled = new Promise<void>((resolve) => {
+      resolveDone = resolve
+    })
+    this.inflight.set(kind, settled)
 
     // Only the in-flight columns are written, so the previous run's finished_at and
     // stats stay readable while this one is under way.
@@ -148,10 +175,22 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
     )
 
     // Deliberately not awaited: the HTTP response returns as soon as the lock is
-    // held, and the work continues on the event loop.
-    void this.run(opts, lock)
+    // held, and the work continues on the event loop. `settled()` is the handle
+    // for callers that do need to wait.
+    void this.run(opts, lock).finally(resolveDone)
 
     return { deduped: false, kind, mode, runningSince: startedAt.toISOString() }
+  }
+
+  /**
+   * Resolves once the in-flight run of `kind` finishes; null if there is none.
+   *
+   * Safe to await when the run was deduped into someone else's — that is the
+   * point. run() never rejects (it catches into finish()), so this cannot throw,
+   * and it is bounded: the HTTP client times out and withRetry caps the attempts.
+   */
+  settled(kind: SyncKind): Promise<void> | null {
+    return this.inflight.get(kind) ?? null
   }
 
   /** Executes the scrape and always leaves the row in a truthful terminal state. */
@@ -172,24 +211,62 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
     }
   }
 
+  /**
+   * Deletes everything one kind of scraper owns. Irreversible, admin-only, and
+   * never performed while that kind is being scraped.
+   *
+   * The lock does double duty as the "is anything running?" test. Checking
+   * `inflight` covers this process; failing to acquire `sync:<kind>` covers the
+   * rest, including another process holding a lease. Either way the answer is a
+   * conflict rather than a delete racing an in-flight insert.
+   */
+  async clear(kind: SyncKind): Promise<ClearResult> {
+    if (this.inflight.has(kind)) {
+      throw new ConflictException(`A ${kind} sync is in progress`)
+    }
+
+    const lock = await this.lock.acquire(`sync:${kind}`, LOCK_TTL_SECONDS)
+    if (!lock) {
+      throw new ConflictException(`A ${kind} sync is in progress elsewhere`)
+    }
+
+    try {
+      const deleted = kind === 'marketplace' ? await this.marketplace.clearAll() : await this.history.clearAll()
+      // The stored state now describes a table that no longer exists, so it is
+      // reset rather than left to report a success over an empty result. `kind` and
+      // `mode` are kept, and the row reads as "never run" until the next scrape.
+      await this.stateRepo.update({ kind }, {
+        runningSince: null,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        lastStatus: null,
+        lastStats: null,
+        lastError: null,
+      } as QueryDeepPartialEntity<SyncStateEntity>)
+      this.logger.warn(`Cleared all ${kind} data: ${JSON.stringify(deleted)}`)
+      return { kind, deleted }
+    } finally {
+      await lock.release().catch(() => undefined)
+    }
+  }
+
   private async execute(opts: EnqueueOptions): Promise<Record<string, unknown>> {
-    const { kind, mode, itemName, maxPages = DEFAULT_MAX_PAGES } = opts
+    const { kind, mode, itemName } = opts
+    // No page cap. Both scrapers walk to the upstream's natural end — an empty
+    // page — so a backfill covers everything the API holds. What keeps a long run
+    // from overlapping with the next one is the lock, which renews itself.
     // Retried because a DNS blip or 5xx from the upstream should not lose the
     // whole run. Re-running is safe: both scrapers upsert by a stable key
     // (item id, tx hash), so a retry is idempotent, just slower.
     return this.withRetry(`sync ${kind}/${mode}`, async () => {
       if (kind === 'marketplace') {
-        const res = await this.marketplaceSync.refresh({
-          itemName,
-          maxPages: mode === 'all' ? maxPages : undefined,
-          mode: mode === 'all' ? 'all' : 'latest',
-        })
+        const res = await this.marketplaceSync.refresh({ itemName, mode: mode === 'all' ? 'all' : 'latest' })
         return { ...res, mode }
       }
 
       const res =
         mode === 'full'
-          ? await this.historySync.backfill({ maxPages })
+          ? await this.historySync.backfill()
           : await this.historySync.refreshLatest()
       return { ...res, mode }
     })

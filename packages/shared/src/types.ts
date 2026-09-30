@@ -17,7 +17,16 @@ export interface MarketplaceItem {
   equipmentType: EquipmentType
   createdAt: string // ISO — equals market_time (duplicate removed from detail)
   mintTime?: string | null // moved from marketplace_item_detail (nullable, equals mint_time)
-  sold: boolean
+  /**
+   * When the item sold, ISO. Null while it is on the market.
+   *
+   * This is the whole sold flag: there is no `sold` boolean to disagree with it.
+   * Test for absence with `!= null` when deciding, and `!== undefined` when
+   * deciding whether the server told you anything at all — an active item is
+   * `null`, which is not the same as a field that failed to arrive.
+   */
+  soldAt?: string | null
+  soldPrice?: number | null
 }
 
 export interface MarketplaceItemDetail extends MarketplaceItem {
@@ -146,7 +155,10 @@ export interface AdaptedLiveDetail {
     equipmentType: string
     price: number
     currency: string
-    sold: boolean
+    // A live fetch only ever answers "is this listed right now", and only for
+    // tokens that were not in our DB to begin with. Nothing to reconcile, so
+    // this is always null rather than a carried-over value.
+    soldAt: string | null
   }
   detail: {
     attributes: { trait_type: string; value: string }[]

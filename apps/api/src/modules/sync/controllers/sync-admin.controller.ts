@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common'
-import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator'
-import { SyncOrchestratorService, type SyncStatusSnapshot } from '../sync-orchestrator.service'
+import { IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator'
+import { SyncOrchestratorService, type SyncStatusSnapshot, type ClearResult } from '../sync-orchestrator.service'
 import { AdminGuard } from '../../auth/guards'
 import type { SyncKind, SyncMode } from '../entities'
 
@@ -16,13 +16,19 @@ export class EnqueueSyncDto {
   @IsString()
   @MaxLength(120)
   itemName?: string
+}
 
-  /** Upper bound for a backfill. The API has no natural end, so this is the guard rail. */
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(2000)
-  maxPages?: number
+export class ClearSyncDataDto {
+  @IsIn(['marketplace', 'history'])
+  kind!: SyncKind
+
+  /**
+   * Must be sent as `true`. Not a UI affordance — the dialog in DataView does its
+   * own confirming — but a body field that a stale script or a replayed request
+   * cannot satisfy by accident, so the table is only ever emptied deliberately.
+   */
+  @IsBoolean()
+  confirm!: boolean
 }
 
 /**
@@ -52,7 +58,19 @@ export class SyncAdminController {
       // bounded by what is new rather than by the size of the history.
       mode: dto.mode ?? 'latest',
       itemName: dto.itemName,
-      maxPages: dto.maxPages,
     })
+  }
+
+  /**
+   * Deletes everything one kind of scraper owns. Irreversible.
+   *
+   * POST rather than DELETE because it carries a body, which DELETE does not
+   * reliably support. Refused with 409 while that kind is being scraped, so a
+   * clear can never race an in-flight run.
+   */
+  @Post('clear')
+  @HttpCode(200)
+  clear(@Body() dto: ClearSyncDataDto): Promise<ClearResult> {
+    return this.orchestrator.clear(dto.kind)
   }
 }

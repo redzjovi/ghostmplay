@@ -99,7 +99,7 @@
                 </div>
                 <div class="space-y-1">
                   <div class="text-xs text-muted-foreground">Market Time</div>
-                  <div class="font-mono text-xs">{{ formatDate(marketTime) }}</div>
+                  <div class="font-mono text-xs">{{ formatDateTime(marketTime) }}</div>
                 </div>
                 <div class="space-y-1">
                   <div class="text-xs text-muted-foreground">Seller ID</div>
@@ -186,7 +186,7 @@ import { ArrowLeft, Copy, Shield, Star, ImageOff, ExternalLink } from 'lucide-vu
 import Prism from 'prismjs'
 import 'prismjs/components/prism-json'
 import 'prismjs/themes/prism-tomorrow.css'
-import { formatPrice } from '@/lib/format'
+import { formatDateTime, formatPrice } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -261,14 +261,6 @@ function normalizeImageUrl(raw: string): string {
   if (/^https?:\/\//.test(raw) || raw.startsWith('data:')) return raw
   return raw
 }
-function formatDate(d: string | Date | null): string {
-  if (!d) return '-'
-  try {
-    const date = d instanceof Date ? d : new Date(d)
-    if (isNaN(date.getTime())) return String(d)
-    return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZoneName: 'short' }).format(date)
-  } catch { return String(d) }
-}
 function gradeVariant(g: string): 'default' | 'secondary' | 'outline' {
   const v = String(g).toLowerCase()
   if (v === 'rare') return 'default'
@@ -300,7 +292,7 @@ function copyToken() {
   navigator.clipboard?.writeText(t).catch(()=>{})
 }
 
-type DetailItem = { tokenId:number; name:string; imageUrl:string; equipmentType:string; level:number; enchant:number; gradeEffect:string; price:number; currency:string; sellerId:string; sellerName:string | null; mintTime: string | Date | null; createdAt: string | Date; sold?: boolean }
+type DetailItem = { tokenId:number; name:string; imageUrl:string; equipmentType:string; level:number; enchant:number; gradeEffect:string; price:number; currency:string; sellerId:string; sellerName:string | null; mintTime: string | Date | null; createdAt: string | Date; soldAt?: string | Date | null; soldPrice?: number | null }
 type Detail = { itemId:number; attributes: unknown; datas: unknown; infos: unknown } | null
 
 const rawData = computed(() => data.value)
@@ -337,10 +329,13 @@ const infos = computed(() => {
 const mintTime = computed(()=> (item.value as unknown as { mintTime?: string | Date | null })?.mintTime ?? null)
 const marketTime = computed(()=> (item.value as unknown as { createdAt?: string | Date | null })?.createdAt ?? null)
 const rawDetail = computed(()=> detail.value)
-// Sold out from DB flag sold (when detail empty at fetch time); fallback to detail empty for old rows
+// Sold state comes from the DB, as a timestamp. Sold means soldAt is non-null.
+// The `!== undefined` test is load-bearing: an item that is still on the market
+// has soldAt === null, so testing for a value would drop every active item into
+// the `!detail` fallback below and label it sold out.
 const isSoldOut = computed(() => {
-  const soldFlag = (item.value as unknown as { sold?: boolean })?.sold
-  if (soldFlag !== undefined) return !!soldFlag
+  const soldAt = (item.value as unknown as { soldAt?: string | Date | null })?.soldAt
+  if (soldAt !== undefined) return soldAt != null
   return !detail.value
 })
 

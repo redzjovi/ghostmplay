@@ -8,9 +8,13 @@ function createHarness() {
   const upsertFromApi = vi.fn(async () => ({}))
   const existsByTxHash = vi.fn(async () => false)
   const history = { upsertFromApi, existsByTxHash } as never
-  const svc = new HistorySyncService(client as never, history as never)
+  // Sold state is reconciled from the transfer ledger, not from the run's own
+  // fresh fetches — so this is called once per run, not once per page.
+  const markItemsSold = vi.fn(async () => 0)
+  const marketplace = { markItemsSold } as never
+  const svc = new HistorySyncService(client as never, history as never, marketplace)
   vi.spyOn(svc['logger'], 'log').mockImplementation(() => {})
-  return { svc, tokenTransfers, detailStrict, upsertFromApi, existsByTxHash }
+  return { svc, tokenTransfers, detailStrict, upsertFromApi, existsByTxHash, markItemsSold }
 }
 
 const t = (over: Record<string, unknown> = {}) => ({
@@ -140,5 +144,51 @@ describe('HistorySyncService', () => {
     h.tokenTransfers.mockResolvedValueOnce({ count: 0, lists: [] })
     await h.svc.refreshLatest()
     expect(h.tokenTransfers).toHaveBeenCalledWith({ limit: 150, offset: 0 })
+  })
+
+  describe('sold reconciliation', () => {
+    it('reconciles once per backfill run, not once per page', async () => {
+      const h = createHarness()
+      h.tokenTransfers
+        .mockResolvedValueOnce({ count: 3, lists: [t({ tx_hash: '0x1' }), t({ tx_hash: '0x2' })] })
+        .mockResolvedValueOnce({ count: 3, lists: [t({ tx_hash: '0x3' })] })
+      const res = await h.svc.backfill({ limit: 2 })
+      // Three pages were walked but the join is one statement over the whole
+      // ledger, so a per-page call would be redundant work on every run.
+      expect(h.markItemsSold).toHaveBeenCalledTimes(1)
+      expect(res.soldMarked).toBe(0)
+    })
+
+    it('reconciles even when the run fetched nothing new', async () => {
+      // The scenario sequencing exists to prevent: history broke immediately on
+      // an already-known tx, so the item row it needed was inserted by the
+      // marketplace run a moment later. The join still has to run, or that item
+      // stays live forever.
+      const h = createHarness()
+      h.tokenTransfers.mockResolvedValue({ count: 10, lists: [t({ tx_hash: '0xknown' })] })
+      ;(h.existsByTxHash as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (hash: string) => hash === '0xknown')
+      const res = await h.svc.refreshLatest({ limit: 15 })
+      expect(h.upsertFromApi).not.toHaveBeenCalled()
+      expect(h.markItemsSold).toHaveBeenCalledTimes(1)
+      expect(res.soldMarked).toBe(0)
+    })
+
+    it('reports how many items the join marked sold', async () => {
+      const h = createHarness()
+      h.tokenTransfers.mockResolvedValue({ count: 1, lists: [t({ tx_hash: '0x1' })] })
+      h.markItemsSold.mockResolvedValue(4)
+      const res = await h.svc.refreshLatest({ limit: 15 })
+      expect(res.soldMarked).toBe(4)
+    })
+
+    it('passes no token scope to the join', async () => {
+      // Scoping the update to this run's fresh transfers is the bug: refreshLatest
+      // stops at the first known tx_hash, so a transfer fetched once would never
+      // be reconciled again.
+      const h = createHarness()
+      h.tokenTransfers.mockResolvedValue({ count: 1, lists: [t({ tx_hash: '0x1' })] })
+      await h.svc.refreshLatest({ limit: 15 })
+      expect(h.markItemsSold).toHaveBeenCalledWith()
+    })
   })
 })

@@ -172,8 +172,11 @@ const displayName = computed(() => String(item.value?.name ?? props.fallbackItem
 const equipmentType = computed(() => String(item.value?.equipmentType ?? props.fallbackItem?.equipmentType ?? ''))
 const imageUrl = computed(() => normalizeImageUrl(String(item.value?.imageUrl ?? props.fallbackItem?.imageUrl ?? '')))
 const isSoldOut = computed(() => {
-  const sold = (item.value as unknown as { sold?: boolean })?.sold
-  if (sold !== undefined) return !!sold
+  // `!== undefined`, not a truthiness or nullish test: soldAt is null for an item
+  // that is still on the market, so anything looser would fall through to the
+  // `!detail` fallback and call every active item sold.
+  const soldAt = (item.value as unknown as { soldAt?: string | null })?.soldAt
+  if (soldAt !== undefined) return soldAt != null
   // if we have raw but no detail, treat as sold? keep fallback
   if (raw.value && !detail.value) return true
   return false

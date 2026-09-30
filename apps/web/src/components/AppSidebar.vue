@@ -78,6 +78,21 @@
           </router-link>
         </div>
       </div>
+      <!-- Admin: scraper controls, which is why it is gated here. The server is the
+           real boundary (AdminGuard on /api/admin/sync); hiding the link just keeps
+           the nav honest about who can use it. -->
+      <div class="pt-2">
+        <router-link
+          v-if="auth.isAdmin"
+          to="/admin/data"
+          class="flex items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground md:px-3"
+          :class="isDataActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
+          :title="isCollapsed ? 'Data' : undefined"
+        >
+          <Database class="h-4 w-4 shrink-0" />
+          <span v-show="!isCollapsed" class="hidden truncate md:block">Data</span>
+        </router-link>
+      </div>
     </nav>
     <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed ? 'justify-center' : 'justify-between'">
       <div class="flex min-w-0 items-center gap-2">
@@ -132,7 +147,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star, History, LogIn, LogOut } from 'lucide-vue-next'
+import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, ChevronsLeft, List, Star, History, Database, LogIn, LogOut } from 'lucide-vue-next'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -150,6 +165,7 @@ const isFavoriteActive = computed(() => {
   return route.path.startsWith('/marketplaces/favorites')
 })
 const isListActive = computed(() => route.path === '/marketplaces/list' || (isMarketplace.value && !isFavoriteActive.value && !route.path.startsWith('/items')))
+const isDataActive = computed(() => route.path.startsWith('/admin'))
 
 const favStore = useFavoritesStore()
 const favoriteCount = computed(() => favStore.favorites.length)

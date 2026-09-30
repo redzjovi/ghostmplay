@@ -91,7 +91,7 @@ export type AdaptedLiveDetail = {
     equipmentType: string
     price: number
     currency: string
-    sold: boolean
+    soldAt: string | null
   }
   detail: {
     attributes: { trait_type: string; value: string }[]
@@ -135,7 +135,7 @@ export function adaptLiveDetail(raw: LiveDetailInput, fallbackName = ''): Adapte
       equipmentType,
       price: Number.isFinite(priceRaw) ? priceRaw : 0,
       currency: 'NUMI',
-      sold: false
+      soldAt: null
     },
     detail: { attributes, datas }
   }

@@ -142,6 +142,12 @@ export interface EnqueueSyncResult {
   runningSince: string | null
 }
 
+/** Per-kind row counts, so the UI can report what a clear actually removed. */
+export interface ClearSyncDataResult {
+  kind: SyncKind
+  deleted: { items: number; details: number } | { transfers: number }
+}
+
 export interface WebApiAccount {
   id: number
   username: string
@@ -159,7 +165,19 @@ export interface WebApi {
   admin: {
     sync: {
       status(): Promise<SyncStatus>
-      enqueue(input: { kind: SyncKind; mode?: string; itemName?: string; maxPages?: number }): Promise<EnqueueSyncResult>
+      /**
+       * `mode` is narrowed rather than `string` because the server accepts all
+       * three values for either kind but only dispatches on `all` for marketplace
+       * and `full` for history — a mismatch is silently downgraded to the
+       * incremental run instead of rejected. See lib/syncPanel.backfillMode.
+       */
+      enqueue(input: { kind: SyncKind; mode?: 'all' | 'latest' | 'full'; itemName?: string }): Promise<EnqueueSyncResult>
+      /**
+       * Deletes everything a kind of scraper owns. Irreversible, admin-only, and
+       * 409 while that kind is running. `confirm` is a body field rather than a UI
+       * affordance, so a stale script cannot empty a table by accident.
+       */
+      clear(input: { kind: SyncKind; confirm: true }): Promise<ClearSyncDataResult>
     }
   }
   marketplace: {
@@ -218,6 +236,7 @@ export const api: WebApi = {
     sync: {
       status: () => get('/admin/sync/status'),
       enqueue: (input) => post('/admin/sync', input),
+      clear: (input) => post('/admin/sync/clear', input),
     },
   },
 

@@ -128,15 +128,48 @@ are reachable from inside a container at `10.0.2.2`, run on fast disk, and are
 included in the daily backup. Running a database in a container would spend RAM
 on a box that caps a process at 1-2GB.
 
+**Admin surfaces are separate from browsing, and the destructive one is separated
+from the rest.** The Data page (`/admin/data`) holds the only sync controls, hidden
+from non-admins and guarded by `meta.requiresAdmin`; both are UX, since
+`AdminGuard` on `/api/admin/sync` is the actual boundary. Each kind also has a
+**Clear all** button, which deletes that scraper's table outright. It is refused with
+a 409 while that kind is being scraped, so a delete cannot race an in-flight run, and
+it resets that kind's `sync_state` row — otherwise the page would keep reporting
+"done, 516 synced" over an empty table. The two sections are not equivalent to clear:
+the marketplace's incremental run breaks on the first item it already has, which an
+empty table has none of, so it re-walks every page on the next cron tick and refills
+itself in about a minute; history's incremental run only ever fetches the first page,
+so a cleared ledger stays empty until a full backfill is started by hand. Clearing
+history is the expensive one by orders of magnitude.
+
 **Sync is locked and admin-only.** Scraping the upstream API is by far the most
-expensive thing the app does, and the API has no natural end. A cron runs only the
-incremental `latest` mode, once a minute — it stops as soon as it meets an item
-already stored with the same `created_at`, so on an idle upstream it is roughly one
-request that finds itself already up to date, and its cost tracks what is new
-rather than the size of history. Full backfills are admin-triggered and run under a
-page cap. Nothing is held open over an HTTP request: a trigger takes a lock, returns,
-and the UI polls. If a deploy kills a run mid-flight, it is marked `interrupted` on
-the next boot rather than spinning forever.
+expensive thing the app does. A cron runs only the incremental `latest` mode, once a
+minute — it stops as soon as it meets an item already stored with the same
+`created_at`, so on an idle upstream it is roughly one request that finds itself
+already up to date, and its cost tracks what is new rather than the size of history.
+Full backfills are admin-triggered and uncapped: both scrapers walk until the upstream
+returns a short page, which it does rather than clamping the offset, so a backfill
+covers everything the API holds. Nothing is held open over an HTTP request: a trigger
+takes a lock, returns, and the UI polls. If a deploy kills a run mid-flight, it is
+marked `interrupted` on the next boot rather than spinning forever.
+
+**The lock TTL is a backstop, not a budget, and it renews.** `LockService` starts a
+timer when a lock is granted and stops it in `release`, so a lease tracks the lock's
+real lifetime instead of being a number a run has to fit inside. That is what makes an
+uncapped backfill safe: with a fixed TTL a long enough run would lose its lock
+mid-scrape, and a second trigger would start a concurrent scrape against the same
+public API. Renewal is token-guarded — it extends the TTL only while the holder still
+owns the key, and stops for good if the key is someone else's, so a run that overran
+cannot resurrect itself over its successor.
+
+**Every timestamp in the ledger is UTC, and the upstream's are not.** The transfer log
+returns a bare `YYYY-MM-DD HH:mm:ss` with no offset, and it is KST — the same +09:00
+that `item-detail` spells out in `mintTime`. Reading it as UTC stored every transfer 9
+hours ahead, which put some in the future and skewed the sold-state join that compares
+a transfer against its listing's `created_at`. The two fields that do carry a zone are
+honoured rather than assumed. `1790812800000-FixTransferTimezone.ts` repairs rows
+stored before the fix, gated on a future-dated transfer existing as proof, since a
+completed transfer cannot be in the future.
 
 **Deduplication is the lock, not a queue.** The lock key is `sync:<kind>`, so two
 triggers of the same kind contend whether they arrive at this process or another, and
@@ -145,6 +178,77 @@ starting a second scrape. State lives in one row per kind (`sync_state`), which
 replaced an append-only `sync_jobs` table that grew every tick and had to be pruned;
 per-kind rows are also what let each page show its own progress, rather than a
 finished history run being reported as the marketplace's last sync.
+
+**The cron runs the two kinds in sequence, marketplace first.** `enqueue()` is
+fire-and-forget by design — it takes the lock, writes `running`, and returns — so
+looping over the kinds used to start both at once regardless of order. The scheduler
+now awaits `settled(kind)` between them. The order is a correctness requirement, not
+tidiness: history derives sold state from the transfer ledger, and both of its paths
+stop at the first transfer they already hold. If history ran while the marketplace
+scraper had not yet inserted the item row a transfer refers to, the join would match
+nothing, and because the transfer was then stored, no later run would ever look at it
+again — the item would stay on sale permanently. Awaiting also covers the deduped
+case: a tick that joined someone else's run waits for that run rather than racing
+ahead of it.
+
+## Item lifecycle
+
+**Sold state is a timestamp, and the transfer ledger is the only thing that writes it.**
+`marketplace_items.sold_at` is null while an item is on the market and set to the
+sale's own `created_at` once it leaves. There is no `sold` boolean to disagree with
+it. `sold_price` rides along from the same row.
+
+**Sold is derived, never inferred.** Each history run ends with
+`MarketplaceService.markItemsSold()`, a single `UPDATE` joining `marketplace_items`
+against `marketplace_token_transfers`. The join is deliberately **table-wide** rather
+than scoped to the transfers that run just fetched: `refreshLatest` breaks on the
+first transfer it already holds, so a scope built from "the fresh ones" would never
+revisit a transfer whose item row did not exist at the time. Re-deriving from the
+whole ledger is a hash join on an indexed `token_id` that makes that whole class of
+miss unrepresentable. `sold_at IS NULL` in the predicate makes it a no-op once a row
+is marked, and pins `sold_at` to the first sale observed rather than letting a later
+transfer overwrite it. `price > 0` excludes mints and zero-value hand-offs.
+
+This replaced an inference that read "a detail fetch returned nothing, so it must be
+sold". That fetch swallowed every error, so a 5xx, a 429 and a DNS blip were all
+indistinguishable from a delisted token and were persisted as a sale — and it only
+ran for items whose `created_at` had changed, so real sales were missed too. On the
+dev database that column held 31 `true` values of which 3 were real sales; the
+migration's backfill, which reads only the ledger, corrected the other 28.
+
+**Browse shows live items only; item detail does not.** `list()` and both
+`getDistinct*` filter on `sold_at IS NULL`, served by a partial index
+(`created_at DESC WHERE sold_at IS NULL`) that the planner uses directly. In
+TypeORM a later `.where()` resets the clause and discards prior `andWhere`s, so that
+predicate has to be the first one built. `getByTokenId` is deliberately *not* filtered,
+so a deep link to a sold item still resolves and renders as "sold out" rather than
+404ing.
+
+**A relisted item is the same token under a new `item_id`.** `token_id` is unique, so
+a lookup by `id` alone misses the existing row and the insert trips the unique index —
+an unhandled `23505` that fails the whole run. `upsertFromApi` matches on either key
+and keeps the original row, clearing `sold_at` only when the match came from
+`tokenId`. A plain re-scrape of a sold item deliberately leaves `sold_at` alone:
+otherwise every marketplace run would resurrect it until history caught up. Because a
+relist keeps its old sale in the ledger, the join requires `transfer.created_at >=
+item.created_at` — without it the very next run would re-sell the new listing from the
+previous one, and `sold_at` would end up earlier than `created_at`.
+
+**Sync controls live on one admin-only page** (`/admin/data`, "Data" in the sidebar).
+The marketplace and history pages keep only a passive "Syncing…" banner and their
+last-sync text, so an admin who starts a run still sees the data moving after
+navigating away. The page carries one button per kind per mode, and the mode is
+derived from the kind rather than written out: `EnqueueSyncDto` accepts all three
+values for either kind, but the orchestrator only treats `all` as a marketplace
+backfill and `full` as a history one, so a cross-wired value is accepted, logs
+nothing, and silently degrades to the incremental run. The sidebar link is hidden for
+non-admins and the route guard redirects them, but both are UX only — the real
+boundary is `AdminGuard` on `/api/admin/sync`.
+
+**Known gap: delisted is not sold.** A seller cancelling a listing produces no
+transfer, so such an item keeps a null `sold_at` and stays listed. Covering that
+needs a `last_seen_at` column plus a full-inventory walk to spot listings that
+vanished from the upstream list without a sale. Not implemented.
 
 **Transient scraper failures are retried.** Outbound traffic from inside a
 rootless container is the weak point: DNS goes through Docker's embedded resolver

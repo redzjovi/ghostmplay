@@ -32,7 +32,7 @@ describe('adaptLiveDetail', () => {
     expect(res!.item.equipmentType).toBe('Armor')
     expect(res!.item.price).toBe(148)
     expect(res!.item.currency).toBe('NUMI')
-    expect(res!.item.sold).toBe(false)
+    expect(res!.item.soldAt).toBeNull()
     expect(res!.detail.attributes).toHaveLength(3)
     expect(res!.detail.datas).toEqual([{ title: 'Basic Effect', values: [{ ATK: '+10' }] }])
   })

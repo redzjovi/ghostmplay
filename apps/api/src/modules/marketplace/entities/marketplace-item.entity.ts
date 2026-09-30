@@ -26,7 +26,13 @@ export class MarketplaceItemEntity {
   // created_at as timestamptz per user (API gives epoch seconds) — equals market_time (duplicate, market_time removed from detail)
   @Column({ type: 'timestamptz', name: 'created_at' }) createdAt!: Date
   @Column({ type: 'timestamptz', nullable: true, name: 'mint_time' }) mintTime!: Date | null
-  @Column({ type: 'boolean', default: false, name: 'sold' }) sold!: boolean
+
+  // Sold state, as a timestamp rather than a boolean: a listing is sold when
+  // this is non-null, and the value is the sale itself. It is written from
+  // exactly one place — the transfer ledger, via MarketplaceService.markItemsSold
+  // — so it cannot drift into a state the transfer log does not support.
+  @Column({ type: 'timestamptz', nullable: true, name: 'sold_at' }) soldAt!: Date | null
+  @Column({ type: 'double precision', nullable: true, name: 'sold_price' }) soldPrice!: number | null
 
   @OneToOne(() => MarketplaceItemDetailEntity, (d) => d.item, { cascade: true })
   detail?: MarketplaceItemDetailEntity
