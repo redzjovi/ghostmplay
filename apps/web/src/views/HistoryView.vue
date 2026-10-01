@@ -183,29 +183,34 @@
           <tr v-for="t in (store.items as Row[])" :key="t.id" class="border-t hover:bg-muted/30">
             <td class="px-3 py-2">
               <div class="flex items-center gap-1 max-w-[220px]">
-                <span class="font-mono text-xs truncate flex-1 min-w-0" :title="t.sellerId">{{ shortAddr(t.sellerId) }}</span>
+                <button type="button" class="font-mono text-xs flex-1 min-w-0" :class="partyValueClass(seller === t.sellerId)" :title="t.sellerId" @click="filterBySellerAddress(t.sellerId)">{{ shortAddr(t.sellerId) }}</button>
                 <Button variant="ghost" size="icon" class="h-5 w-5 shrink-0" title="Copy seller address" aria-label="Copy seller address" @click="copyText(t.sellerId, `seller-${t.id}`)">
                   <Check v-if="copiedKey === `seller-${t.id}`" class="h-3 w-3 text-primary" />
                   <Copy v-else class="h-3 w-3" />
                 </Button>
               </div>
-              <div class="text-xs text-muted-foreground truncate max-w-[220px]" :title="t.sellerUsername ?? ''">{{ t.sellerUsername ?? '—' }}</div>
+              <button v-if="t.sellerUsername" type="button" class="text-xs text-muted-foreground max-w-[220px]" :class="partyValueClass(sellerName === t.sellerUsername)" :title="t.sellerUsername" @click="filterBySellerName(t.sellerUsername)">{{ t.sellerUsername }}</button>
+              <div v-else class="text-xs text-muted-foreground max-w-[220px]">—</div>
             </td>
             <td class="px-3 py-2">
               <div class="flex items-center gap-1 max-w-[220px]">
-                <span class="font-mono text-xs truncate flex-1 min-w-0" :title="t.buyerId">{{ shortAddr(t.buyerId) }}</span>
+                <button type="button" class="font-mono text-xs flex-1 min-w-0" :class="partyValueClass(buyer === t.buyerId)" :title="t.buyerId" @click="filterByBuyerAddress(t.buyerId)">{{ shortAddr(t.buyerId) }}</button>
                 <Button variant="ghost" size="icon" class="h-5 w-5 shrink-0" title="Copy buyer address" aria-label="Copy buyer address" @click="copyText(t.buyerId, `buyer-${t.id}`)">
                   <Check v-if="copiedKey === `buyer-${t.id}`" class="h-3 w-3 text-primary" />
                   <Copy v-else class="h-3 w-3" />
                 </Button>
               </div>
-              <div class="text-xs text-muted-foreground truncate max-w-[220px]" :title="t.buyerUsername ?? ''">{{ t.buyerUsername ?? '—' }}</div>
+              <button v-if="t.buyerUsername" type="button" class="text-xs text-muted-foreground max-w-[220px]" :class="partyValueClass(buyerName === t.buyerUsername)" :title="t.buyerUsername" @click="filterByBuyerName(t.buyerUsername)">{{ t.buyerUsername }}</button>
+              <div v-else class="text-xs text-muted-foreground max-w-[220px]">—</div>
             </td>
             <td class="px-3 py-2">
               <span class="font-medium">{{ t.itemName }}</span>
               <Badge v-if="t.claimed" variant="secondary" class="ml-2 text-[10px]">claimed</Badge>
-              <div class="font-mono text-[11px] text-muted-foreground" :title="`Preview token ${t.tokenId}`">
-                <button class="hover:text-primary hover:underline underline-offset-2" @click="openPreview(t.tokenId, t.itemName)">{{ t.tokenId }}</button>
+              <div class="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+                <span class="truncate" :title="`Token ${t.tokenId}`">{{ t.tokenId }}</span>
+                <Button variant="ghost" size="icon" class="h-5 w-5 shrink-0" :title="`View ${t.itemName}`" :aria-label="`View ${t.itemName}`" @click="openPreview(t.tokenId, t.itemName)">
+                  <Eye class="h-3 w-3" />
+                </Button>
               </div>
               <div class="flex items-center gap-1 max-w-[200px]">
                 <span class="font-mono text-[11px] text-muted-foreground truncate flex-1 min-w-0" :title="t.txHash">{{ t.txHash }}</span>
@@ -237,7 +242,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Loader2, ChevronsUpDown, Check, Copy, Calendar as CalendarIcon } from 'lucide-vue-next'
+import { Loader2, ChevronsUpDown, Check, Copy, Eye, Calendar as CalendarIcon } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -470,6 +475,41 @@ async function fetchPage() {
 
 function goToPage(p: number) {
   commit({ page: Math.max(1, p) })
+}
+
+// Clicking a party value in a row drills the list down to it; clicking the value
+// that is already active widens it back. commit() pushes, so Back undoes either
+// step, and because no page is given it resets to the first page — the result set
+// is a different one.
+function filterBySellerAddress(v: string) {
+  seller.value = seller.value === v ? '' : v
+  commit({ seller: seller.value })
+}
+function filterByBuyerAddress(v: string) {
+  buyer.value = buyer.value === v ? '' : v
+  commit({ buyer: buyer.value })
+}
+function filterBySellerName(v: string) {
+  // The username selects treat 'all' as unset, not the empty string.
+  if (v && !store.sellerNames.includes(v)) store.sellerNames.push(v)
+  sellerName.value = sellerName.value === v ? 'all' : v
+  commit({ sellerName: sellerName.value })
+}
+function filterByBuyerName(v: string) {
+  if (v && !store.buyerNames.includes(v)) store.buyerNames.push(v)
+  buyerName.value = buyerName.value === v ? 'all' : v
+  commit({ buyerName: buyerName.value })
+}
+
+/**
+ * A value that matches the active filter is tinted, so it is obvious which party
+ * narrowed the list. Everything else stays plain until hovered.
+ */
+function partyValueClass(active: boolean): string {
+  return cn(
+    'text-left truncate hover:text-primary hover:underline underline-offset-2',
+    active && 'text-primary font-medium bg-primary/10 rounded-sm px-1',
+  )
 }
 
 function applyFilters() {
