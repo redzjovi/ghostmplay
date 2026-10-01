@@ -64,22 +64,27 @@
               <label class="text-xs font-medium text-muted-foreground">Search</label>
               <div class="relative">
                 <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input v-model="q" placeholder="Please enter your search term." class="pl-8" @keyup.enter="load(1)" />
+                <Input v-model="q" placeholder="Please enter your search term." class="pl-8" @keyup.enter="applyFilters()" />
               </div>
             </div>
           </div>
 
-          <div v-if="filterGroups.length" class="space-y-1.5 pt-3 border-t">
-            <div v-for="g in filterGroups" :key="g.key" class="flex flex-wrap items-center gap-2">
-              <span class="w-28 shrink-0 text-xs text-muted-foreground">{{ g.title }}</span>
-              <Badge v-for="c in g.chips" :key="c.key" variant="secondary" class="gap-1">
-                {{ c.label }} <Button variant="ghost" size="icon" class="h-3 w-3 p-0" @click="c.clear()"><X class="h-3 w-3" /></Button>
-              </Badge>
-              <Button v-if="g.chips.length>1" variant="ghost" size="icon" class="h-3 w-3 p-0" :title="`Clear ${g.title}`" :aria-label="`Clear ${g.title}`" @click="g.clearGroup()"><X class="h-3 w-3" /></Button>
+            <div v-if="filterGroups.length" class="space-y-1.5 pt-3 border-t">
+              <div v-for="g in filterGroups" :key="g.key" class="flex flex-wrap items-center gap-2">
+                <span class="w-28 shrink-0 text-xs text-muted-foreground">{{ g.title }}</span>
+                <Badge v-for="c in g.chips" :key="c.key" variant="secondary" class="gap-1">
+                  {{ c.label }} <Button variant="ghost" size="icon" class="h-3 w-3 p-0" @click="c.clear()"><X class="h-3 w-3" /></Button>
+                </Badge>
+                <Button v-if="g.chips.length>1" variant="ghost" size="icon" class="h-3 w-3 p-0" :title="`Clear ${g.title}`" :aria-label="`Clear ${g.title}`" @click="g.clearGroup()"><X class="h-3 w-3" /></Button>
+              </div>
+              <Button v-if="activeFilterCount>1" variant="ghost" size="sm" @click="clearAllFilters()">Clear all</Button>
             </div>
-            <Button v-if="activeFilterCount>1" variant="ghost" size="sm" @click="clearAllFilters()">Clear all</Button>
+
+            <div class="flex gap-2 items-center flex-wrap">
+              <Button variant="default" size="sm" @click="applyFilters()">Apply</Button>
+              <Button variant="ghost" size="sm" @click="clearAllFilters()">Clear</Button>
+            </div>
           </div>
-        </div>
 
         <!-- Row 2: Sort, Limit, Add favorite -->
         <div class="flex flex-wrap gap-2 items-center">
@@ -124,7 +129,7 @@
 
         <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
           <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
-            <router-link :to="itemDetailTo(it.tokenId)" class="block overflow-hidden leading-[0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring relative group" :class="viewMode==='list' ? 'rounded-l-lg w-12 shrink-0' : 'rounded-t-md'" :aria-label="`View ${it.name} details`" :title="it.name">
+            <router-link :to="`/items/${it.tokenId}`" class="block overflow-hidden leading-[0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring relative group" :class="viewMode==='list' ? 'rounded-l-lg w-12 shrink-0' : 'rounded-t-md'" :aria-label="`View ${it.name} details`" :title="it.name">
               <Badge v-if="isSoldOut(it)" variant="destructive" class="absolute top-1.5 left-1.5 z-10 text-[10px] px-1.5 py-0.5">Sold Out</Badge>
               <div class="absolute inset-0 z-10 grid place-items-center pointer-events-none transition-colors group-hover:bg-black/20" :class="viewMode==='list' ? 'hidden' : 'opacity-0 group-hover:opacity-100 focus-visible-within:opacity-100'"><Button variant="secondary" size="icon" class="pointer-events-auto h-9 w-9 rounded-full bg-background/95 shadow-lg hover:opacity-100" title="Preview" aria-label="Preview" @click.stop.prevent="openPreview(it)"><Eye class="h-4 w-4" /></Button></div>
               <AspectRatio :ratio="1" class="relative w-full bg-muted overflow-hidden rounded-md">
@@ -139,7 +144,7 @@
               </AspectRatio>
             </router-link>
             <template v-if="viewMode==='list'">
-              <span class="min-w-0 flex-1 truncate text-sm font-medium"><router-link :to="itemDetailTo(it.tokenId)" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></span>
+              <span class="min-w-0 flex-1 truncate text-sm font-medium"><router-link :to="`/items/${it.tokenId}`" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></span>
               <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{{ it.equipmentType }}</span>
               <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">Lv {{ it.level }}</span>
               <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{{ it.gradeEffect }}</span>
@@ -147,7 +152,7 @@
               <Button variant="ghost" size="icon" class="shrink-0 h-7 w-7" title="Preview" aria-label="Preview" @click.stop="openPreview(it)"><Eye class="h-4 w-4" /></Button>
             </template>
             <div v-else class="flex flex-col gap-1 min-w-0 px-3">
-              <CardTitle class="text-sm leading-tight truncate"><router-link :to="itemDetailTo(it.tokenId)" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></CardTitle>
+              <CardTitle class="text-sm leading-tight truncate"><router-link :to="`/items/${it.tokenId}`" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></CardTitle>
               <div class="flex flex-col gap-1">
                 <Badge variant="outline" class="w-fit text-[11px]">{{ it.equipmentType }}</Badge>
                 <span class="text-xs text-muted-foreground">Lv {{ it.level }}</span>
@@ -162,14 +167,7 @@
           </Card>
         </div>
 
-        <div v-if="totalPages > 1" class="flex justify-center gap-1">
-          <Button variant="outline" size="sm" :disabled="page<=1" @click="load(page-1)">‹ Prev</Button>
-          <template v-for="n in pageNumbers" :key="n">
-            <span v-if="n==='...'" class="px-2 text-muted-foreground">…</span>
-            <Button v-else :variant="n===page ? 'default' : 'outline'" size="sm" :disabled="n===page" @click="load(n as number)">{{ n }}</Button>
-          </template>
-          <Button variant="outline" size="sm" :disabled="page>=totalPages" @click="load(page+1)">Next ›</Button>
-        </div>
+        <ListPagination :page="page" :limit="limit" :total="store.total" @update:page="goToPage" />
     </div>
 
     <!-- Favorite view (menu Favorite) -->
@@ -238,7 +236,7 @@
                 <label class="text-xs font-medium text-muted-foreground">Search</label>
                 <div class="relative">
                   <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input v-model="q" placeholder="Please enter your search term." class="pl-8" @keyup.enter="load(1)" />
+                  <Input v-model="q" placeholder="Please enter your search term." class="pl-8" @keyup.enter="applyFilters()" />
                 </div>
               </div>
             </div>
@@ -252,6 +250,14 @@
                 <Button v-if="g.chips.length>1" variant="ghost" size="icon" class="h-3 w-3 p-0" :title="`Clear ${g.title}`" :aria-label="`Clear ${g.title}`" @click="g.clearGroup()"><X class="h-3 w-3" /></Button>
               </div>
               <Button v-if="activeFilterCount>1" variant="ghost" size="sm" @click="clearAllFilters()">Clear all</Button>
+            </div>
+
+            <!-- The card is a form: nothing here reaches the list until Apply, so a
+                 half-typed search never pushes a history entry. Page size and sort
+                 sit outside it and apply immediately. -->
+            <div class="flex gap-2 items-center flex-wrap">
+              <Button variant="default" size="sm" @click="applyFilters()">Apply</Button>
+              <Button variant="ghost" size="sm" @click="clearAllFilters()">Clear</Button>
             </div>
           </div>
 
@@ -293,7 +299,7 @@
           <div class="text-sm text-muted-foreground">Total: {{ store.total }} · Showing {{ store.items.length }} · Page {{ page }}/{{ totalPages }}</div>
           <div :class="viewMode==='grid' ? 'grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]' : 'flex flex-col gap-1.5'">
             <Card v-for="it in (store.items as Item[])" :key="it.tokenId" :class="[viewMode==='list' ? 'flex flex-row items-center gap-2 overflow-hidden' : 'flex flex-col gap-2 overflow-hidden', isSoldOut(it) ? 'opacity-60' : '']">
-              <router-link :to="itemDetailTo(it.tokenId)" class="block overflow-hidden leading-[0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring relative group" :class="viewMode==='list' ? 'rounded-l-lg w-12 shrink-0' : 'rounded-t-md'" :aria-label="`View ${it.name} details`" :title="it.name">
+              <router-link :to="`/items/${it.tokenId}`" class="block overflow-hidden leading-[0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring relative group" :class="viewMode==='list' ? 'rounded-l-lg w-12 shrink-0' : 'rounded-t-md'" :aria-label="`View ${it.name} details`" :title="it.name">
                 <Badge v-if="isSoldOut(it)" variant="destructive" class="absolute top-1.5 left-1.5 z-10 text-[10px] px-1.5 py-0.5">Sold Out</Badge>
                 <div class="absolute inset-0 z-10 grid place-items-center pointer-events-none transition-colors group-hover:bg-black/20" :class="viewMode==='list' ? 'hidden' : 'opacity-0 group-hover:opacity-100 focus-visible-within:opacity-100'"><Button variant="secondary" size="icon" class="pointer-events-auto h-9 w-9 rounded-full bg-background/95 shadow-lg hover:opacity-100" title="Preview" aria-label="Preview" @click.stop.prevent="openPreview(it)"><Eye class="h-4 w-4" /></Button></div>
                 <AspectRatio :ratio="1" class="relative w-full bg-muted overflow-hidden rounded-md">
@@ -303,7 +309,7 @@
                 </AspectRatio>
               </router-link>
               <template v-if="viewMode==='list'">
-                <span class="min-w-0 flex-1 truncate text-sm font-medium"><router-link :to="itemDetailTo(it.tokenId)" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></span>
+                <span class="min-w-0 flex-1 truncate text-sm font-medium"><router-link :to="`/items/${it.tokenId}`" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></span>
                 <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{{ it.equipmentType }}</span>
                 <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">Lv {{ it.level }}</span>
                 <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{{ it.gradeEffect }}</span>
@@ -311,7 +317,7 @@
                 <Button variant="ghost" size="icon" class="shrink-0 h-7 w-7" title="Preview" aria-label="Preview" @click.stop="openPreview(it)"><Eye class="h-4 w-4" /></Button>
               </template>
               <div v-else class="flex flex-col gap-1 min-w-0 px-3">
-                <CardTitle class="text-sm leading-tight truncate"><router-link :to="itemDetailTo(it.tokenId)" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></CardTitle>
+                <CardTitle class="text-sm leading-tight truncate"><router-link :to="`/items/${it.tokenId}`" class="hover:text-primary hover:underline underline-offset-2" :title="it.name">{{ it.name }}</router-link></CardTitle>
                 <div class="flex flex-col gap-1">
                   <Badge variant="outline" class="w-fit text-[11px]">{{ it.equipmentType }}</Badge>
                   <span class="text-xs text-muted-foreground">Lv {{ it.level }}</span>
@@ -325,14 +331,7 @@
               </div>
             </Card>
           </div>
-          <div v-if="totalPages > 1" class="flex justify-center gap-1">
-            <Button variant="outline" size="sm" :disabled="page<=1" @click="load(page-1)">‹ Prev</Button>
-            <template v-for="n in pageNumbers" :key="n">
-              <span v-if="n==='...'" class="px-2 text-muted-foreground">…</span>
-              <Button v-else :variant="n===page ? 'default' : 'outline'" size="sm" :disabled="n===page" @click="load(n as number)">{{ n }}</Button>
-            </template>
-            <Button variant="outline" size="sm" :disabled="page>=totalPages" @click="load(page+1)">Next ›</Button>
-          </div>
+          <ListPagination :page="page" :limit="limit" :total="store.total" @update:page="goToPage" />
         </div>
 
         <!-- Favorite list -->
@@ -416,6 +415,20 @@ import { useSyncStore } from '@/stores/sync'
 import type { GradeEffect, MarketplaceFavorite } from '@ghostmplay/shared'
 import ItemPreviewDialog from '@/components/ItemPreviewDialog.vue'
 import AddFavoriteDialog from '@/components/AddFavoriteDialog.vue'
+import ListPagination from '@/components/ListPagination.vue'
+import {
+  MARKET_PAGE_SIZES,
+  MARKET_DEFAULT_LIMIT,
+  MARKET_LIMIT_KEY,
+  buildMarketQuery,
+  clampPage,
+  joinCsv,
+  marketStateFromQuery,
+  parseArrayParam,
+  totalPageCount,
+  type MarketListState,
+  type MarketSort,
+} from '@/lib/listQuery'
 import { formatDateTime, formatPrice } from '@/lib/format'
 
 const NUMI_ICON_URL = 'https://market.numine.io/images/market/icon_numi.png'
@@ -450,24 +463,26 @@ function imageFailed(key: string): boolean { return errorImages.value.has(key) }
 // items, so there is no fallback here — soldAt should be null for everything shown.
 function isSoldOut(it: Item): boolean { return it.soldAt != null }
 function favSortLabel(s:string){ if(s==='price_asc') return 'Price low → high'; if(s==='price_desc') return 'Price high → low'; return 'Recently registered' }
-function encodeBackUrl(fullPath: string): string {
-  try { return btoa(encodeURIComponent(fullPath)) } catch { try { return btoa(fullPath) } catch { return '' } }
-}
-function itemDetailTo(tokenId: number | string): string {
-  const back = encodeBackUrl(route.fullPath)
-  return back ? `/items/${tokenId}?back_url=${encodeURIComponent(back)}` : `/items/${tokenId}`
-}
 
-function parseArrayParam(v: unknown): string[] {
-  if (!v) return []
-  if (Array.isArray(v)) return v.flatMap((x) => String(x).split(',')).map((s) => s.trim()).filter(Boolean)
-  return String(v).split(',').map((s) => s.trim()).filter(Boolean)
-}
 const route = useRoute()
 const router = useRouter()
-const q = ref(String(route.query.q || ''))
-const selectedGradeEffects = ref<GradeEffect[]>(parseArrayParam(route.query.grade_effect) as GradeEffect[])
-const selectedEquipmentTypes = ref<string[]>(parseArrayParam(route.query.equipment_type))
+
+// The URL is the source of truth for everything that shapes the result set. These
+// refs mirror it and are rewritten from it on every route change; edits a user
+// makes in the filter card stay local until Apply turns them into a navigation.
+const initialState = marketStateFromQuery(route.query, localStorage.getItem(MARKET_LIMIT_KEY))
+const q = ref(initialState.q)
+const sort = ref<MarketSort>(initialState.sort)
+const page = ref(initialState.page)
+const limit = ref(initialState.limit)
+const equipmentType = ref(initialState.equipmentType)
+const gradeEffect = ref(initialState.gradeEffect)
+const selectedFavoriteId = ref<number | null>(initialState.fav)
+
+// Array views of the CSV filter state, for the checkbox lists and the API query.
+const selectedEquipmentTypes = computed(() => parseArrayParam(equipmentType.value))
+const selectedGradeEffects = computed(() => parseArrayParam(gradeEffect.value) as GradeEffect[])
+
 const equipOpen = ref(false)
 const gradeOpen = ref(false)
 const equipmentTypeFullTitle = computed(() => selectedEquipmentTypes.value.join(', '))
@@ -486,18 +501,17 @@ const gradeEffectLabel = computed(() => {
 })
 function toggleEquip(v: string) {
   const i = selectedEquipmentTypes.value.indexOf(v)
-  if (i >= 0) selectedEquipmentTypes.value = selectedEquipmentTypes.value.filter((x) => x !== v)
-  else selectedEquipmentTypes.value = [...selectedEquipmentTypes.value, v]
+  const next = i >= 0 ? selectedEquipmentTypes.value.filter((x) => x !== v) : [...selectedEquipmentTypes.value, v]
+  equipmentType.value = joinCsv(next)
 }
 function toggleGrade(v: string) {
   const i = selectedGradeEffects.value.indexOf(v as GradeEffect)
-  if (i >= 0) selectedGradeEffects.value = selectedGradeEffects.value.filter((x) => x !== v)
-  else selectedGradeEffects.value = [...selectedGradeEffects.value, v as GradeEffect]
+  const next = i >= 0 ? selectedGradeEffects.value.filter((x) => x !== v) : [...selectedGradeEffects.value, v as GradeEffect]
+  gradeEffect.value = joinCsv(next as string[])
 }
-const sort = ref<'recent' | 'price_asc' | 'price_desc'>(
-  (route.query.sort as 'recent' | 'price_asc' | 'price_desc') || 'recent'
-)
-const page = ref<number>(Number(route.query.page) || 1)
+
+const viewMode = ref<'grid' | 'list'>((localStorage.getItem('ghostmplay:marketplace:viewMode') as 'grid' | 'list') || 'grid')
+watch(viewMode, (v) => localStorage.setItem('ghostmplay:marketplace:viewMode', v))
 
 // Sync runs in the background server-side and is admin-only; see stores/sync.ts.
 // The controls live on the admin Data page. This view only reads its own kind's
@@ -505,16 +519,10 @@ const page = ref<number>(Number(route.query.page) || 1)
 // as the marketplace's.
 const sync = useSyncStore()
 const mkt = computed(() => sync.forKind('marketplace'))
-const PAGE_SIZES = [12, 24, 48, 96]
-const storedLimit = Number(route.query.limit ?? localStorage.getItem('ghostmplay:marketplace:limit') ?? 12)
-const initialLimit = Number.isFinite(storedLimit) ? storedLimit : 12
-const limit = ref(PAGE_SIZES.includes(initialLimit) ? initialLimit : 12)
-watch(sort, () => { page.value=1; load(1) })
-watch(limit, (v) => { localStorage.setItem('ghostmplay:marketplace:limit', String(v)); page.value=1; load(1) })
-const viewMode = ref<'grid' | 'list'>((localStorage.getItem('ghostmplay:marketplace:viewMode') as 'grid' | 'list') || 'grid')
-watch(viewMode, (v) => localStorage.setItem('ghostmplay:marketplace:viewMode', v))
+const PAGE_SIZES = MARKET_PAGE_SIZES
 
 const isFavoriteView = computed(() => route.path.startsWith('/marketplaces/favorites'))
+const basePath = computed(() => (isFavoriteView.value ? '/marketplaces/favorites' : '/marketplaces/list'))
 const selectedFavorite = ref<MarketplaceFavorite | null>(null)
 const origFavoriteSnapshot = ref<{ q: string | null; equipmentTypes: string[]; gradeEffects: string[]; sort: string } | null>(null)
 const updatingFavorite = ref(false)
@@ -541,133 +549,117 @@ const renameTarget = ref<MarketplaceFavorite|null>(null)
 const showDelete = ref(false)
 const deleteTarget = ref<MarketplaceFavorite|null>(null)
 
-function resetBrowseFiltersToClean() {
-  q.value = ''
-  selectedEquipmentTypes.value = []
-  selectedGradeEffects.value = []
-  sort.value = 'recent'
-  page.value = 1
-}
-
-async function restoreFavoriteFromUrl() {
-  const favId = route.query.fav ? Number(route.query.fav) : null
-  const isFavView = route.path.startsWith('/marketplaces/favorites')
-  if (isFavView && favId) {
-    if (!favStore.favorites.length) await favStore.fetchFavorites()
-    const fav = favStore.favorites.find((f) => f.id === favId)
-    if (fav && selectedFavorite.value?.id !== favId) {
-      selectedFavorite.value = fav
-      origFavoriteSnapshot.value = {
-        q: fav.q ?? null,
-        equipmentTypes: [...(fav.equipmentTypes ?? [])],
-        gradeEffects: [...(fav.gradeEffects ?? [])],
-        sort: fav.sort ?? 'recent',
-      }
-      // Restore filter UI from URL if present, else from favorite — preserves unsaved edits after back from item detail
-      const urlQ = typeof route.query.q === 'string' ? route.query.q : ''
-      const urlEq = parseArrayParam(route.query.equipment_type)
-      const urlGe = parseArrayParam(route.query.grade_effect)
-      const urlSort = route.query.sort as string | undefined
-      q.value = urlQ || fav.q || ''
-      // if URL has no equipment_type/grade_effect, fallback to favorite; otherwise use URL (edited)
-      const hasEqInUrl = route.query.equipment_type !== undefined
-      const hasGeInUrl = route.query.grade_effect !== undefined
-      selectedEquipmentTypes.value = hasEqInUrl ? urlEq : [...(fav.equipmentTypes ?? [])]
-      selectedGradeEffects.value = hasGeInUrl ? urlGe as GradeEffect[] : [...(fav.gradeEffects ?? [])] as GradeEffect[]
-      if (urlSort) sort.value = urlSort as 'recent' | 'price_asc' | 'price_desc'
-      else sort.value = (fav.sort as 'recent' | 'price_asc' | 'price_desc') ?? 'recent'
-      page.value = route.query.page ? Number(route.query.page) || 1 : 1
-      await load(page.value)
-    }
-  } else if (!isFavView || !favId) {
-    if (selectedFavorite.value) {
-      selectedFavorite.value = null
-      origFavoriteSnapshot.value = null
-    }
+/** Snapshot of the filter refs as the URL currently represents them. */
+function currentState(): MarketListState {
+  return {
+    page: page.value,
+    limit: limit.value,
+    sort: sort.value,
+    q: q.value.trim(),
+    equipmentType: equipmentType.value,
+    gradeEffect: gradeEffect.value,
+    fav: isFavoriteView.value ? selectedFavoriteId.value : null,
   }
 }
 
-watch(() => route.path, async (newPath, oldPath) => {
-  const wasFav = oldPath?.startsWith('/marketplaces/favorites')
-  const isFav = newPath.startsWith('/marketplaces/favorites')
-  if (isFav) {
-    if (auth.isAuthenticated) await favStore.fetchFavorites()
-    await restoreFavoriteFromUrl()
-  } else if (wasFav && newPath === '/marketplaces/list') {
-    // Clean defaults when going to list from favorites detail/list
-    selectedFavorite.value = null
-    origFavoriteSnapshot.value = null
-    resetBrowseFiltersToClean()
-    await load(1)
-  } else if (!isFav) {
-    selectedFavorite.value = null
-    origFavoriteSnapshot.value = null
-  }
-})
-watch(() => route.query.fav, async () => {
-  await restoreFavoriteFromUrl()
-})
-
-function syncUrl() {
-  const query: Record<string, string> = {}
-  if (page.value !== 1) query.page = String(page.value)
-  if (limit.value !== 12) query.limit = String(limit.value)
-  if (sort.value !== 'recent') query.sort = sort.value
-  if (q.value.trim()) query.q = q.value.trim()
-  if (selectedEquipmentTypes.value.length) query.equipment_type = selectedEquipmentTypes.value.join(',')
-  if (selectedGradeEffects.value.length) query.grade_effect = selectedGradeEffects.value.join(',')
-  if (isFavoriteView.value && selectedFavorite.value) query.fav = String(selectedFavorite.value.id)
-  const basePath = isFavoriteView.value ? '/marketplaces/favorites' : '/marketplaces/list'
-  router.replace({ path: basePath, query })
+function applyState(s: MarketListState) {
+  q.value = s.q
+  sort.value = s.sort
+  page.value = s.page
+  limit.value = s.limit
+  equipmentType.value = s.equipmentType
+  gradeEffect.value = s.gradeEffect
+  selectedFavoriteId.value = s.fav
 }
-const totalPages = computed(() => Math.max(1, Math.ceil(store.total / limit.value)))
-const pageNumbers = computed<(number | string)[]>(() => {
-  const total = totalPages.value
-  const cur = page.value
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const pages: (number | string)[] = [1]
-  if (cur > 3) pages.push('...')
-  const start = Math.max(2, cur - 1)
-  const end = Math.min(total - 1, cur + 1)
-  for (let i = start; i <= end; i++) pages.push(i)
-  if (cur < total - 2) pages.push('...')
-  pages.push(total)
-  return pages.filter((p, idx, arr) => !(p === '...' && arr[idx - 1] === '...'))
-})
+
+/**
+ * True when `query` already describes the current route. Both sides are compared
+ * as CSV so `?a=1&a=2` and `?a=1,2` are the same place. This is what makes
+ * `commit` idempotent, so a watcher that fires while `applyState` is writing the
+ * refs cannot push a duplicate entry.
+ */
+function routeMatches(path: string, query: Record<string, string>): boolean {
+  if (path !== route.path) return false
+  const keys = new Set([...Object.keys(route.query), ...Object.keys(query)])
+  for (const k of keys) {
+    if (parseArrayParam(route.query[k]).join(',') !== parseArrayParam(query[k]).join(',')) return false
+  }
+  return true
+}
+
+/**
+ * Write a change to the URL. Push by default so Back undoes it; `replace` is for
+ * corrections that should not add an entry (mount-time normalisation, clamping an
+ * out-of-range page).
+ */
+function commit(patch: Partial<MarketListState> = {}, opts: { replace?: boolean; path?: string } = {}) {
+  // Any change other than paging invalidates the current page.
+  const paged = patch.page !== undefined ? patch : { ...patch, page: 1 }
+  const next = { ...currentState(), ...paged }
+  const path = opts.path ?? basePath.value
+  const query = buildMarketQuery(next)
+  // Nothing to navigate to. The route watcher below is what loads the new state,
+  // so skipping here also skips the refetch.
+  if (routeMatches(path, query)) return
+  void (opts.replace ? router.replace({ path, query }) : router.push({ path, query }))
+}
+
+const totalPages = computed(() => totalPageCount(store.total, limit.value))
+
 type FilterChip = { key: string; label: string; clear: () => void }
 const filterGroups = computed(() => {
   const groups: { key: string; title: string; chips: FilterChip[]; clearGroup: () => void }[] = []
-  if (selectedEquipmentTypes.value.length) groups.push({ key: 'equipmentType', title: 'Equipment type', chips: selectedEquipmentTypes.value.map((v) => ({ key: `equipmentType:${v}`, label: v, clear: () => { selectedEquipmentTypes.value = selectedEquipmentTypes.value.filter((x) => x !== v) } })).sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })), clearGroup: () => { selectedEquipmentTypes.value = [] } })
-  if (selectedGradeEffects.value.length) groups.push({ key: 'gradeEffect', title: 'Grade effect', chips: selectedGradeEffects.value.map((v) => ({ key: `gradeEffect:${v}`, label: v, clear: () => { selectedGradeEffects.value = selectedGradeEffects.value.filter((x) => x !== v) } })).sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })), clearGroup: () => { selectedGradeEffects.value = [] } })
-  if (q.value) groups.push({ key: 'q', title: 'Search', chips: [{ key: 'q', label: `“${q.value}”`, clear: () => { q.value = '' } }], clearGroup: () => { q.value = '' } })
+  if (selectedEquipmentTypes.value.length) groups.push({ key: 'equipmentType', title: 'Equipment type', chips: selectedEquipmentTypes.value.map((v) => ({ key: `equipmentType:${v}`, label: v, clear: () => { equipmentType.value = joinCsv(selectedEquipmentTypes.value.filter((x) => x !== v)) } })).sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })), clearGroup: () => { equipmentType.value = '' } })
+  if (selectedGradeEffects.value.length) groups.push({ key: 'gradeEffect', title: 'Grade effect', chips: selectedGradeEffects.value.map((v) => ({ key: `gradeEffect:${v}`, label: v, clear: () => { gradeEffect.value = joinCsv(selectedGradeEffects.value.filter((x) => x !== v)) } })).sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })), clearGroup: () => { gradeEffect.value = '' } })
+  if (q.value.trim()) groups.push({ key: 'q', title: 'Search', chips: [{ key: 'q', label: `“${q.value.trim()}”`, clear: () => { q.value = '' } }], clearGroup: () => { q.value = '' } })
   return groups
 })
 const activeFilterCount = computed(() => filterGroups.value.reduce((n, g) => n + g.chips.length, 0))
 const hasActiveFilter = computed(() => q.value.trim().length > 0 || selectedEquipmentTypes.value.length > 0 || selectedGradeEffects.value.length > 0)
-function clearAllFilters() { q.value=''; selectedEquipmentTypes.value=[]; selectedGradeEffects.value=[] }
 
-let qDebounce: ReturnType<typeof setTimeout> | null = null
-let filterDebounce: ReturnType<typeof setTimeout> | null = null
-watch(q, () => {
-  if (qDebounce) clearTimeout(qDebounce)
-  qDebounce = setTimeout(() => { page.value=1; load(1) }, 1000)
-})
-watch([() => [...selectedEquipmentTypes.value], () => [...selectedGradeEffects.value]], () => {
-  if (filterDebounce) clearTimeout(filterDebounce)
-  filterDebounce = setTimeout(() => { page.value=1; load(1) }, 300)
-})
-async function load(p = page.value) {
-  page.value = Math.max(1, p)
-  syncUrl()
+/** Submit the filter card. Everything above Apply is staged until this runs. */
+function applyFilters() {
+  commit({ q: q.value.trim(), equipmentType: equipmentType.value, gradeEffect: gradeEffect.value })
+}
+function clearAllFilters() {
+  q.value = ''
+  equipmentType.value = ''
+  gradeEffect.value = ''
+  commit({ q: '', equipmentType: '', gradeEffect: '' })
+}
+
+/** Fetches the page the refs currently describe. Never touches the URL. */
+async function fetchPage() {
   await store.fetchList({
-    q: q.value || undefined,
+    q: q.value.trim() || undefined,
     grade_effect: selectedGradeEffects.value.length ? [...selectedGradeEffects.value] : undefined,
     equipment_type: selectedEquipmentTypes.value.length ? [...selectedEquipmentTypes.value] : undefined,
     sort: sort.value,
     page: page.value,
     limit: limit.value,
   })
+  // A page past the end (out-of-range link, or a filter that shrank the result
+  // set) would otherwise leave an empty grid under "Page 12/3". Replace rather
+  // than push: the entry the user is on should end up valid. The route watcher
+  // picks the corrected page up and refetches, so no explicit reload here.
+  const last = clampPage(page.value, store.total, limit.value)
+  if (last !== page.value) {
+    page.value = last
+    commit({ page: last }, { replace: true })
+  }
 }
+
+function goToPage(p: number) {
+  commit({ page: Math.max(1, p) })
+}
+
+// Sort and page size sit outside the filter card and apply immediately.
+watch(sort, (v) => commit({ sort: v }))
+watch(limit, (v) => {
+  localStorage.setItem(MARKET_LIMIT_KEY, String(v))
+  commit({ limit: v })
+})
+
 // Read straight from the sync store rather than snapshotting after a self-triggered
 // run: the store already polls while anything is in flight, so this is current
 // whether the run was started here, on the Data page, or by the cron.
@@ -683,13 +675,17 @@ function syncModeLabel(mode: string | null | undefined): string {
   if (mode === 'latest') return 'Latest'
   return ''
 }
+/**
+ * Drop filter values the server no longer offers. Silent, like the original: a
+ * filter that has quietly become unavailable should not add a history entry.
+ */
 function pruneSelections() {
   const validTypes = new Set(store.equipmentTypes)
   const validGrades = new Set<string>(store.gradeEffects)
   const nextTypes = selectedEquipmentTypes.value.filter((v) => validTypes.has(v))
   const nextGrades = selectedGradeEffects.value.filter((v) => validGrades.has(v as string))
-  if (JSON.stringify(nextTypes) !== JSON.stringify(selectedEquipmentTypes.value)) selectedEquipmentTypes.value = nextTypes
-  if (JSON.stringify(nextGrades) !== JSON.stringify(selectedGradeEffects.value)) selectedGradeEffects.value = nextGrades
+  if (nextTypes.join() !== selectedEquipmentTypes.value.join()) equipmentType.value = joinCsv(nextTypes)
+  if (nextGrades.join() !== selectedGradeEffects.value.join()) gradeEffect.value = joinCsv(nextGrades as string[])
 }
 const previewTokenId = ref<number | null>(null)
 const previewOpen = ref(false)
@@ -726,12 +722,14 @@ async function viewFavorite(fav: MarketplaceFavorite){
     gradeEffects: [...(fav.gradeEffects ?? [])],
     sort: fav.sort ?? 'recent',
   }
-  page.value=1
-  q.value = fav.q ?? ''
-  selectedEquipmentTypes.value = [...(fav.equipmentTypes ?? [])]
-  selectedGradeEffects.value = [...(fav.gradeEffects ?? [])] as GradeEffect[]
-  sort.value = (fav.sort as 'recent'|'price_asc'|'price_desc') ?? 'recent'
-  await load(1)
+  commit({
+    page: 1,
+    fav: fav.id,
+    q: fav.q ?? '',
+    equipmentType: joinCsv(fav.equipmentTypes ?? []),
+    gradeEffect: joinCsv(fav.gradeEffects ?? []),
+    sort: (fav.sort as MarketSort) ?? 'recent',
+  }, { path: '/marketplaces/favorites' })
 }
 async function updateFavorite(){
   if (!selectedFavorite.value || !isFavoriteDirty.value) return
@@ -750,7 +748,6 @@ async function updateFavorite(){
       gradeEffects: [...(updated.gradeEffects ?? [])],
       sort: updated.sort ?? 'recent',
     }
-    await load(1)
   } catch (e: unknown) {
     alert(e instanceof Error ? e.message : String(e))
   } finally {
@@ -760,19 +757,20 @@ async function updateFavorite(){
 async function applyFavorite(fav: MarketplaceFavorite){
   selectedFavorite.value = null
   origFavoriteSnapshot.value = null
-  q.value = fav.q ?? ''
-  selectedEquipmentTypes.value = [...(fav.equipmentTypes ?? [])]
-  selectedGradeEffects.value = [...(fav.gradeEffects ?? [])] as GradeEffect[]
-  sort.value = (fav.sort as 'recent'|'price_asc'|'price_desc') ?? 'recent'
-  page.value=1
-  router.replace({ path: '/marketplaces/list', query: {} })
-  await load(1)
+  commit({
+    page: 1,
+    fav: null,
+    q: fav.q ?? '',
+    equipmentType: joinCsv(fav.equipmentTypes ?? []),
+    gradeEffect: joinCsv(fav.gradeEffects ?? []),
+    sort: (fav.sort as MarketSort) ?? 'recent',
+  }, { path: '/marketplaces/list' })
 }
 function backToFavorites(){
   selectedFavorite.value=null
   origFavoriteSnapshot.value=null
-  favStore.fetchFavorites()
-  router.replace({ path: '/marketplaces/favorites' })
+  void favStore.fetchFavorites()
+  commit({ fav: null, q: '', equipmentType: '', gradeEffect: '' }, { path: '/marketplaces/favorites' })
 }
 function startRename(fav: MarketplaceFavorite){ renameTarget.value=fav; renameName.value=fav.name; renameError.value=''; showRename.value=true }
 async function doRename(){
@@ -795,8 +793,55 @@ async function doDelete(){
   await favStore.remove(id)
   showDelete.value=false
   if (wasDetail && route.query.fav) {
-    router.replace({ path: '/marketplaces/favorites' })
+    commit({ fav: null, q: '', equipmentType: '', gradeEffect: '' }, { path: '/marketplaces/favorites' })
   }
+}
+
+// The single place state is derived from the URL. Back, Forward, a pushed filter
+// change and a fresh load all arrive here, which is why they can never disagree
+// about what page is showing.
+watch(
+  () => route.fullPath,
+  async () => {
+    const next = marketStateFromQuery(route.query, localStorage.getItem(MARKET_LIMIT_KEY))
+    applyState(next)
+    if (!isFavoriteView.value || !next.fav) {
+      selectedFavorite.value = null
+      origFavoriteSnapshot.value = null
+    } else {
+      await syncSelectedFavorite(next.fav)
+    }
+    await fetchPage()
+    pruneSelections()
+  },
+)
+
+/**
+ * Load a favorite and adopt its stored filters for the parts the URL left unset,
+ * so `/favorites?fav=3` shows the favorite rather than an unfiltered list.
+ */
+async function syncSelectedFavorite(favId: number) {
+  if (!favStore.favorites.length) await favStore.fetchFavorites()
+  const fav = favStore.favorites.find((f) => f.id === favId)
+  if (!fav) {
+    selectedFavorite.value = null
+    origFavoriteSnapshot.value = null
+    return
+  }
+  if (selectedFavorite.value?.id !== favId) {
+    selectedFavorite.value = fav
+    origFavoriteSnapshot.value = {
+      q: fav.q ?? null,
+      equipmentTypes: [...(fav.equipmentTypes ?? [])],
+      gradeEffects: [...(fav.gradeEffects ?? [])],
+      sort: fav.sort ?? 'recent',
+    }
+  }
+  // Anything the URL does not mention falls back to the favorite's own value.
+  if (!route.query.equipment_type) equipmentType.value = joinCsv(fav.equipmentTypes ?? [])
+  if (!route.query.grade_effect) gradeEffect.value = joinCsv(fav.gradeEffects ?? [])
+  if (!route.query.q && fav.q) q.value = fav.q
+  if (!route.query.sort) sort.value = (fav.sort as MarketSort) ?? 'recent'
 }
 
 onMounted(async () => {
@@ -809,17 +854,22 @@ onMounted(async () => {
     return
   }
   // Filters are public; favorites are not. Fetching them in the same Promise.all
-  // would reject on 401 for a guest and skip load() entirely, leaving the list empty.
+  // would reject on 401 for a guest and skip the first load, leaving the list empty.
   await store.fetchFilterOptions()
   if (auth.isAuthenticated) await favStore.fetchFavorites().catch(() => {})
   // No-op for non-admins: the store checks the role and the endpoints are 403 anyway.
   void sync.start()
-  // If URL has fav param under /favorites (e.g., back from /items/:id), restore detail before first load
-  if (route.path.startsWith('/marketplaces/favorites') && route.query.fav) {
-    await restoreFavoriteFromUrl()
-  } else {
-    await load()
-  }
+
+  // A bare URL carries no page size, but one may be remembered from a previous
+  // visit. Replace (never push) so the URL becomes shareable without adding an
+  // entry the user never asked for. The replace lands in the route watcher, which
+  // does the first load — hence the flag instead of a fetch on both paths.
+  const normalized = buildMarketQuery(currentState())
+  const needsNormalize = !routeMatches(basePath.value, normalized)
+  if (needsNormalize) router.replace({ path: basePath.value, query: normalized })
+
+  if (selectedFavoriteId.value) await syncSelectedFavorite(selectedFavoriteId.value)
+  if (!needsNormalize) await fetchPage()
   pruneSelections()
 })
 </script>

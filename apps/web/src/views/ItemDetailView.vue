@@ -203,26 +203,10 @@ const data = ref<unknown>(null)
 const imgError = ref(false)
 const imgLoaded = ref(false)
 
-function decodeBackUrl(encoded: string): string | null {
-  try {
-    const decoded = decodeURIComponent(atob(encoded))
-    // basic safety: must start with / or #/ or /
-    if (decoded.startsWith('/') || decoded.startsWith('#')) return decoded.replace(/^#/, '')
-    return decoded
-  } catch {
-    try { return atob(encoded) } catch { return null }
-  }
-}
 function goBack() {
-  const raw = route.query.back_url as string | undefined
-  if (raw) {
-    const decoded = decodeBackUrl(decodeURIComponent(raw))
-    if (decoded) {
-      router.replace(decoded)
-      return
-    }
-  }
-  // handle legacy ?tab=favorite bookmark without back_url
+  // The list views push a history entry per filter/page change and the item
+  // cards push this page, so Back lands exactly where the visitor came from.
+  // The tab fallback only serves bookmarks from before those paths existed.
   const tab = route.query.tab as string | undefined
   if (tab === 'favorite') {
     router.replace('/marketplaces/favorites')

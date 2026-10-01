@@ -1,8 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
   history: createWebHistory(),
+  scrollBehavior,
   routes: [
     { path: '/', redirect: '/marketplaces/list' },
     { path: '/marketplace', redirect: '/marketplaces/list' },
@@ -52,5 +54,26 @@ router.beforeEach(async (to) => {
 
   return { name: 'login', query: { next: to.fullPath }, replace: true }
 })
+
+/**
+ * The list views push a history entry for every committed filter or page change,
+ * so without this Back would restore the URL but leave the window scrolled
+ * wherever it happened to be.
+ *
+ * A pop restores the offset the browser saved. A push that lands on a different
+ * page goes to the top, since the previous page's rows are gone. A push that only
+ * changed filters, sort or page size keeps the current offset (`false`), because
+ * the rows the user was looking at are still there.
+ */
+function scrollBehavior(
+  to: RouteLocationNormalized,
+  from: RouteLocationNormalized,
+  savedPosition: { left: number; top: number } | null,
+) {
+  if (savedPosition) return savedPosition
+  if (to.hash) return { el: to.hash }
+  if (to.path === from.path && to.query.page === from.query.page) return false
+  return { top: 0 }
+}
 
 export default router

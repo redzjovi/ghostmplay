@@ -12,7 +12,7 @@
       <div class="grid gap-3 md:grid-cols-2">
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Seller address</label>
-          <Input v-model="seller" placeholder="e.g. 0x…" @keyup.enter="load(1)" />
+          <Input v-model="seller" placeholder="e.g. 0x…" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Seller username</label>
@@ -42,7 +42,7 @@
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Buyer address</label>
-          <Input v-model="buyer" placeholder="e.g. 0x…" @keyup.enter="load(1)" />
+          <Input v-model="buyer" placeholder="e.g. 0x…" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Buyer username</label>
@@ -72,7 +72,7 @@
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Item name</label>
-          <Input v-model="itemName" placeholder="e.g. Gold Box" @keyup.enter="load(1)" />
+          <Input v-model="itemName" placeholder="e.g. Gold Box" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Claimed</label>
@@ -87,19 +87,19 @@
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Token id</label>
-          <Input v-model="tokenId" type="number" min="0" placeholder="e.g. 4949" @keyup.enter="load(1)" />
+          <Input v-model="tokenId" type="number" min="0" placeholder="e.g. 4949" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Tx hash</label>
-          <Input v-model="txHash" placeholder="e.g. 0x…" @keyup.enter="load(1)" />
+          <Input v-model="txHash" placeholder="e.g. 0x…" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Price min</label>
-          <Input v-model="priceMin" type="number" min="0" placeholder="e.g. 0" @keyup.enter="load(1)" />
+          <Input v-model="priceMin" type="number" min="0" placeholder="e.g. 0" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Price max</label>
-          <Input v-model="priceMax" type="number" min="0" placeholder="e.g. 1000" @keyup.enter="load(1)" />
+          <Input v-model="priceMax" type="number" min="0" placeholder="e.g. 1000" @keyup.enter="applyFilters()" />
         </div>
         <div class="flex flex-col gap-1">
           <label class="text-xs font-medium text-muted-foreground">Created from</label>
@@ -107,7 +107,7 @@
             <PopoverTrigger as-child>
               <Button variant="outline" class="justify-start text-left font-normal" :class="!createdFrom && 'text-muted-foreground'">
                 <CalendarIcon class="mr-2 h-4 w-4" />
-                {{ createdFrom ?? 'Pick a date' }}
+                {{ createdFrom || 'Pick a date' }}
               </Button>
             </PopoverTrigger>
             <PopoverContent class="w-auto p-0" align="start">
@@ -121,7 +121,7 @@
             <PopoverTrigger as-child>
               <Button variant="outline" class="justify-start text-left font-normal" :class="!createdTo && 'text-muted-foreground'">
                 <CalendarIcon class="mr-2 h-4 w-4" />
-                {{ createdTo ?? 'Pick a date' }}
+                {{ createdTo || 'Pick a date' }}
               </Button>
             </PopoverTrigger>
             <PopoverContent class="w-auto p-0" align="start">
@@ -131,7 +131,7 @@
         </div>
       </div>
       <div class="flex gap-2 items-center flex-wrap">
-        <Button variant="default" size="sm" @click="load(1)">Apply</Button>
+        <Button variant="default" size="sm" @click="applyFilters()">Apply</Button>
         <Button variant="ghost" size="sm" @click="clearFilters">Clear</Button>
       </div>
     </div>
@@ -228,14 +228,7 @@
       </table>
     </div>
 
-    <div v-if="totalPages > 1" class="flex justify-center gap-1">
-      <Button variant="outline" size="sm" :disabled="page<=1" @click="load(page-1)">‹ Prev</Button>
-      <template v-for="n in pageNumbers" :key="n">
-        <span v-if="n==='...'" class="px-2 text-muted-foreground">…</span>
-        <Button v-else :variant="n===page ? 'default' : 'outline'" size="sm" :disabled="n===page" @click="load(n as number)">{{ n }}</Button>
-      </template>
-      <Button variant="outline" size="sm" :disabled="page>=totalPages" @click="load(page+1)">Next ›</Button>
-    </div>
+    <ListPagination :page="page" :limit="limit" :total="store.total" @update:page="goToPage" />
 
     <ItemPreviewDialog :tokenId="previewTokenId" :open="previewOpen" :fallbackItem="previewFallback" @update:open="previewOpen = $event" />
   </div>
@@ -250,6 +243,20 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import Calendar from '@/components/ui/calendar/Calendar.vue'
 import ItemPreviewDialog from '@/components/ItemPreviewDialog.vue'
+import ListPagination from '@/components/ListPagination.vue'
+import {
+  HISTORY_PAGE_SIZES,
+  HISTORY_DEFAULT_LIMIT,
+  HISTORY_LIMIT_KEY,
+  buildHistoryQuery,
+  clampPage,
+  historyStateFromQuery,
+  parseArrayParam,
+  totalPageCount,
+  type ClaimedFilter,
+  type HistoryListState,
+  type HistorySort,
+} from '@/lib/listQuery'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -273,10 +280,14 @@ const store = useHistoryStore()
 const route = useRoute()
 const router = useRouter()
 
-const seller = ref(String(route.query.seller ?? ''))
-const buyer = ref(String(route.query.buyer ?? ''))
-const sellerName = ref(String(route.query.sellerName ?? 'all') || 'all')
-const buyerName = ref(String(route.query.buyerName ?? 'all') || 'all')
+// The URL is the source of truth for everything that shapes the result set. These
+// refs mirror it and are rewritten from it on every route change, so Back and
+// Forward move through the list instead of being swallowed.
+const initialState = historyStateFromQuery(route.query, localStorage.getItem(HISTORY_LIMIT_KEY))
+const seller = ref(initialState.seller)
+const buyer = ref(initialState.buyer)
+const sellerName = ref(initialState.sellerName)
+const buyerName = ref(initialState.buyerName)
 const sellerNameOpen = ref(false)
 const buyerNameOpen = ref(false)
 function selectSellerName(v: string) {
@@ -287,31 +298,21 @@ function selectBuyerName(v: string) {
   buyerName.value = v
   buyerNameOpen.value = false
 }
-const itemName = ref(String(route.query.itemName ?? route.query.q ?? ''))
-const tokenId = ref(String(route.query.tokenId ?? ''))
-const txHash = ref(String(route.query.txHash ?? ''))
-const priceMin = ref(String(route.query.priceMin ?? ''))
-const priceMax = ref(String(route.query.priceMax ?? ''))
-function asText(v: unknown): string {
-  return String(v ?? '').trim()
-}
-function parseQueryDate(v: unknown): string | undefined {
-  if (typeof v !== 'string' || !v) return undefined
-  const day = v.slice(0, 10)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined
-  const d = new Date(`${day}T00:00:00Z`)
-  return isNaN(d.getTime()) ? undefined : day
-}
-const createdFrom = ref<string | undefined>(parseQueryDate(route.query.createdFrom))
-const createdTo = ref<string | undefined>(parseQueryDate(route.query.createdTo))
+const itemName = ref(initialState.itemName)
+const tokenId = ref(initialState.tokenId)
+const txHash = ref(initialState.txHash)
+const priceMin = ref(initialState.priceMin)
+const priceMax = ref(initialState.priceMax)
+const createdFrom = ref(initialState.createdFrom)
+const createdTo = ref(initialState.createdTo)
 const createdFromOpen = ref(false)
 const createdToOpen = ref(false)
 function pickDate(which: 'from' | 'to', d: unknown) {
   // Calendar emit payload is used structurally only (YYYY-MM-DD string).
   const raw = Array.isArray(d) ? d[0] : d
   if (raw === null || raw === undefined) {
-    if (which === 'from') createdFrom.value = undefined
-    else createdTo.value = undefined
+    if (which === 'from') createdFrom.value = ''
+    else createdTo.value = ''
   } else {
     const day = String((raw as { toString(): string }).toString()).slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return
@@ -321,17 +322,11 @@ function pickDate(which: 'from' | 'to', d: unknown) {
   if (which === 'from') createdFromOpen.value = false
   else createdToOpen.value = false
 }
-const claimed = ref<StringClaimed>((route.query.claimed as StringClaimed) || 'all')
-type StringClaimed = 'all' | 'claimed' | 'unclaimed'
-const sort = ref<HistoryListQuery['sort']>(normalizeSort(route.query.sort as string))
-function normalizeSort(v: string | undefined): HistoryListQuery['sort'] {
-  if (v === 'price_asc' || v === 'price_desc' || v === 'created_at_asc' || v === 'recent') return v
-  return 'recent' // default + legacy 'created_at_desc' alias
-}
-const page = ref(Number(route.query.page) || 1)
-const PAGE_SIZES = [15, 30, 60, 100]
-const storedLimit = Number(route.query.limit ?? localStorage.getItem('ghostmplay:history:limit') ?? 15)
-const limit = ref(PAGE_SIZES.includes(Number.isFinite(storedLimit) ? storedLimit : 15) ? (Number.isFinite(storedLimit) ? storedLimit : 15) : 15)
+const claimed = ref<ClaimedFilter>(initialState.claimed)
+const sort = ref<HistorySort>(initialState.sort)
+const page = ref(initialState.page)
+const limit = ref(initialState.limit)
+const PAGE_SIZES = HISTORY_PAGE_SIZES
 
 // Sync runs in the background server-side and is admin-only; see stores/sync.ts.
 // The controls live on the admin Data page. This view only reads its own kind's
@@ -377,17 +372,18 @@ function openPreview(tokenId: number, itemName: string) {
   previewOpen.value = true
 }
 
+/** The API query for what the refs currently describe. */
 function buildQuery(): HistoryListQuery {
   const q: HistoryListQuery = { page: page.value, limit: limit.value, sort: sort.value }
-  if (asText(seller.value)) q.seller = asText(seller.value)
-  if (asText(buyer.value)) q.buyer = asText(buyer.value)
+  if (seller.value.trim()) q.seller = seller.value.trim()
+  if (buyer.value.trim()) q.buyer = buyer.value.trim()
   if (sellerName.value && sellerName.value !== 'all') q.sellerName = sellerName.value
   if (buyerName.value && buyerName.value !== 'all') q.buyerName = buyerName.value
-  if (asText(itemName.value)) q.itemName = asText(itemName.value)
-  if (asText(tokenId.value) !== '' && Number.isFinite(Number(asText(tokenId.value)))) q.tokenId = Number(asText(tokenId.value))
-  if (asText(txHash.value)) q.txHash = asText(txHash.value)
-  if (priceMin.value !== '' && Number.isFinite(Number(priceMin.value))) q.priceMin = Number(priceMin.value)
-  if (priceMax.value !== '' && Number.isFinite(Number(priceMax.value))) q.priceMax = Number(priceMax.value)
+  if (itemName.value.trim()) q.itemName = itemName.value.trim()
+  if (tokenId.value.trim() !== '' && Number.isFinite(Number(tokenId.value.trim()))) q.tokenId = Number(tokenId.value.trim())
+  if (txHash.value.trim()) q.txHash = txHash.value.trim()
+  if (priceMin.value.trim() !== '' && Number.isFinite(Number(priceMin.value.trim()))) q.priceMin = Number(priceMin.value.trim())
+  if (priceMax.value.trim() !== '' && Number.isFinite(Number(priceMax.value.trim()))) q.priceMax = Number(priceMax.value.trim())
   if (createdFrom.value) q.createdFrom = createdFrom.value
   if (createdTo.value) q.createdTo = createdTo.value
   if (claimed.value === 'claimed') q.claimed = true
@@ -395,30 +391,91 @@ function buildQuery(): HistoryListQuery {
   return q
 }
 
-function syncUrl() {
-  const query: Record<string,string> = {}
-  if (page.value !== 1) query.page = String(page.value)
-  if (limit.value !== 15) query.limit = String(limit.value)
-  if (sort.value !== 'recent') query.sort = String(sort.value)
-  if (asText(seller.value)) query.seller = asText(seller.value)
-  if (asText(buyer.value)) query.buyer = asText(buyer.value)
-  if (sellerName.value && sellerName.value !== 'all') query.sellerName = sellerName.value
-  if (buyerName.value && buyerName.value !== 'all') query.buyerName = buyerName.value
-  if (asText(itemName.value)) query.itemName = asText(itemName.value)
-  if (asText(tokenId.value) !== '') query.tokenId = asText(tokenId.value)
-  if (asText(txHash.value)) query.txHash = asText(txHash.value)
-  if (priceMin.value !== '') query.priceMin = priceMin.value
-  if (priceMax.value !== '') query.priceMax = priceMax.value
-  if (createdFrom.value) query.createdFrom = createdFrom.value
-  if (createdTo.value) query.createdTo = createdTo.value
-  if (claimed.value !== 'all') query.claimed = claimed.value
-  router.replace({ path: '/history/list', query })
+/** The same state expressed as list state, for the URL codec and comparison. */
+function currentState(): HistoryListState {
+  return {
+    page: page.value,
+    limit: limit.value,
+    sort: sort.value,
+    seller: seller.value.trim(),
+    buyer: buyer.value.trim(),
+    sellerName: sellerName.value,
+    buyerName: buyerName.value,
+    itemName: itemName.value.trim(),
+    tokenId: tokenId.value.trim(),
+    txHash: txHash.value.trim(),
+    priceMin: priceMin.value.trim(),
+    priceMax: priceMax.value.trim(),
+    createdFrom: createdFrom.value,
+    createdTo: createdTo.value,
+    claimed: claimed.value,
+  }
 }
 
-async function load(p = page.value) {
-  page.value = Math.max(1, p)
-  syncUrl()
+function applyState(s: HistoryListState) {
+  seller.value = s.seller
+  buyer.value = s.buyer
+  sellerName.value = s.sellerName
+  buyerName.value = s.buyerName
+  itemName.value = s.itemName
+  tokenId.value = s.tokenId
+  txHash.value = s.txHash
+  priceMin.value = s.priceMin
+  priceMax.value = s.priceMax
+  createdFrom.value = s.createdFrom
+  createdTo.value = s.createdTo
+  claimed.value = s.claimed
+  sort.value = s.sort
+  page.value = s.page
+  limit.value = s.limit
+}
+
+/**
+ * True when `query` already describes the current route. Comparing as CSV means
+ * `?a=1&a=2` and `?a=1,2` count as the same place, which is what lets `commit`
+ * stay idempotent while `applyState` writes the refs.
+ */
+function routeMatches(query: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(route.query), ...Object.keys(query)])
+  for (const k of keys) {
+    if (parseArrayParam(route.query[k]).join(',') !== parseArrayParam(query[k]).join(',')) return false
+  }
+  return true
+}
+
+/**
+ * Write a change to the URL. Push by default so Back undoes it; `replace` is for
+ * corrections that should not add an entry (mount normalisation, clamping).
+ */
+function commit(patch: Partial<HistoryListState> = {}, opts: { replace?: boolean } = {}) {
+  // Any change other than paging invalidates the current page.
+  const paged = patch.page !== undefined ? patch : { ...patch, page: 1 }
+  const next = { ...currentState(), ...paged }
+  const query = buildHistoryQuery(next)
+  // Nothing to navigate to. The route watcher below is what loads the new state,
+  // so skipping here also skips the refetch.
+  if (routeMatches(query)) return
+  void (opts.replace ? router.replace({ path: '/history/list', query }) : router.push({ path: '/history/list', query }))
+}
+
+/** Fetches the page the refs describe. Never touches the URL. */
+async function fetchPage() {
   await store.fetchList(buildQuery())
+  const last = clampPage(page.value, store.total, limit.value)
+  if (last !== page.value) {
+    page.value = last
+    commit({ page: last }, { replace: true })
+  }
+}
+
+function goToPage(p: number) {
+  commit({ page: Math.max(1, p) })
+}
+
+function applyFilters() {
+  // Submitting the form goes back to the first page of the new result set.
+  const { page: _page, ...filters } = currentState()
+  commit({ ...filters, page: 1 })
 }
 
 function clearFilters() {
@@ -426,29 +483,29 @@ function clearFilters() {
   tokenId.value = ''; txHash.value = ''
   sellerName.value = 'all'; buyerName.value = 'all'
   priceMin.value = ''; priceMax.value = ''
-  createdFrom.value = undefined; createdTo.value = undefined
+  createdFrom.value = ''; createdTo.value = ''
   claimed.value = 'all'; sort.value = 'recent'
-  load(1)
+  commit({ seller: '', buyer: '', itemName: '', tokenId: '', txHash: '', sellerName: 'all', buyerName: 'all', priceMin: '', priceMax: '', createdFrom: '', createdTo: '', claimed: 'all', sort: 'recent' })
 }
 
-const totalPages = computed(() => Math.max(1, Math.ceil(store.total / limit.value)))
-const pageNumbers = computed<(number|string)[]>(() => {
-  const total = totalPages.value
-  const cur = page.value
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const pages: (number|string)[] = [1]
-  if (cur > 3) pages.push('...')
-  for (let i = Math.max(2, cur-1); i <= Math.min(total-1, cur+1); i++) pages.push(i)
-  if (cur < total-2) pages.push('...')
-  pages.push(total)
-  return pages.filter((p, idx, arr) => !(p==='...' && arr[idx-1]==='...'))
-})
+// The single place state is derived from the URL. Back, Forward and a pushed
+// filter change all arrive here.
+watch(
+  () => route.fullPath,
+  async () => {
+    applyState(historyStateFromQuery(route.query, localStorage.getItem(HISTORY_LIMIT_KEY)))
+    await fetchPage()
+  },
+)
 
-// Page size applies immediately; all other filters submit via Apply.
-watch(limit, () => {
-  localStorage.setItem('ghostmplay:history:limit', String(limit.value))
-  load(1)
+const totalPages = computed(() => totalPageCount(store.total, limit.value))
+
+// Page size and sort sit outside the form and apply immediately.
+watch(limit, (v) => {
+  localStorage.setItem(HISTORY_LIMIT_KEY, String(v))
+  commit({ limit: v })
 })
+watch(sort, (v) => commit({ sort: v }))
 
 const lastSyncedLabel = computed(() => {
   const at = hist.value.lastFinishedAt
@@ -459,7 +516,14 @@ const lastSyncedLabel = computed(() => {
 
 onMounted(async () => {
   await store.fetchFilterOptions().catch(() => {})
-  await load(page.value)
+  // A bare URL carries no page size, but one may be remembered from a previous
+  // visit. Replace (never push) so the URL becomes shareable without adding an
+  // entry the user never asked for. The replace lands in the route watcher, which
+  // does the first load — hence the flag instead of a fetch on both paths.
+  const normalized = buildHistoryQuery(currentState())
+  const needsNormalize = !routeMatches(normalized)
+  if (needsNormalize) router.replace({ path: '/history/list', query: normalized })
+  if (!needsNormalize) await fetchPage()
   // No-op for non-admins.
   void sync.start()
 })
