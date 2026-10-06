@@ -1,14 +1,13 @@
 <template>
   <div class="min-h-screen bg-background text-foreground grid place-items-center px-4">
     <Card class="w-full max-w-[400px] rounded-2xl shadow-sm dark:bg-secondary">
-      <CardHeader class="items-center p-6 pb-4 text-center sm:p-8 sm:pb-5">
-        <CardTitle class="text-xl leading-tight">Sign in</CardTitle>
-        <CardDescription class="text-center">Save favorite searches and follow the market.</CardDescription>
+      <CardHeader class="items-center p-6 pb-5 text-center sm:p-8 sm:pb-6">
+        <CardTitle class="text-xl leading-tight">Log in or sign up</CardTitle>
       </CardHeader>
 
       <CardContent class="sm:p-8 sm:pt-0">
         <!-- Google is the only way in: no username, no password, no register. -->
-        <div v-if="googleEnabled" class="space-y-4">
+        <div v-if="googleEnabled">
           <Button variant="outline" class="h-11 w-full gap-3 rounded-lg" @click="startGoogle">
             <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
               <path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.45a5.5 5.5 0 0 1-2.39 3.62v3h3.86c2.26-2.08 3.58-5.15 3.58-8.81Z" />
@@ -18,11 +17,6 @@
             </svg>
             Continue with Google
           </Button>
-
-          <p class="text-center text-xs leading-relaxed text-muted-foreground">
-            Your account is tied to your Google address — there is no password to
-            forget or reset.
-          </p>
         </div>
 
         <!-- There is no second sign-in method to fall back to, so an unconfigured
@@ -48,7 +42,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useAuthStore } from '@/stores/auth'
 
