@@ -150,16 +150,19 @@ export interface ClearSyncDataResult {
 
 export interface WebApiAccount {
   id: number
-  username: string
+  /** The verified Google address. */
+  email: string | null
   role: 'user' | 'admin'
 }
 
 export interface WebApi {
   auth: {
     me(): Promise<WebApiAccount | null>
-    login(username: string, password: string): Promise<WebApiAccount>
-    register(username: string, password: string): Promise<WebApiAccount>
     logout(): Promise<void>
+    /** URL to send the browser to, to begin Google sign-in. */
+    googleStartUrl(next?: string): string
+    /** Whether Google sign-in is offered at all. */
+    googleEnabled(): Promise<boolean>
   }
   /** Admin-only. Scraper work is locked and not awaited — poll `sync.status` for progress. */
   admin: {
@@ -210,9 +213,14 @@ export interface WebApi {
 export const api: WebApi = {
   auth: {
     me: async () => (await get<{ account: WebApiAccount | null }>('/auth/me')).account,
-    login: (username, password) => post('/auth/login', { username, password }),
-    register: (username, password) => post('/auth/register', { username, password }),
     logout: () => post('/auth/logout'),
+    // A top-level navigation, not a fetch: the CSP is `script-src 'self'` and the
+    // browser has to leave for accounts.google.com and come back to the callback.
+    // `next` is validated server-side; an unsafe value simply falls back to the
+    // marketplace list, so it is safe to pass the current path straight through.
+    googleStartUrl: (next) =>
+      `/api/auth/google${next ? `?next=${encodeURIComponent(next)}` : ''}`,
+    googleEnabled: async () => (await get<{ googleEnabled: boolean }>('/auth/providers')).googleEnabled,
   },
 
   marketplace: {

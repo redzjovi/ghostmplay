@@ -9,7 +9,6 @@ const router = createRouter({
     { path: '/', redirect: '/marketplaces/list' },
     { path: '/marketplace', redirect: '/marketplaces/list' },
     { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
-    { path: '/register', name: 'register', component: () => import('../views/LoginView.vue'), meta: { public: true } },
     { path: '/marketplaces/list', component: () => import('../views/MarketplaceView.vue'), meta: { public: true } },
     { path: '/marketplaces/favorites', component: () => import('../views/MarketplaceView.vue'), meta: { requiresAuth: true } },
     { path: '/history/list', component: () => import('../views/HistoryView.vue'), meta: { public: true } },
@@ -24,7 +23,7 @@ const router = createRouter({
  * same data. Only per-account and admin surfaces need a session — favorites, and
  * the Data page (whose endpoints the server also rejects with 401/403).
  *
- * Gated routes carry `requiresAuth`; login/register carry `public` so they are
+ * Gated routes carry `requiresAuth`; login carries `public` so it is
  * reachable at all. Note that `requiresAuth` is documentation only — the guard
  * fails closed on the *absence* of `public`, so a gated route needs no key to be
  * protected, only one to opt out of protection. `requiresAdmin` is read.
@@ -36,8 +35,10 @@ router.beforeEach(async (to) => {
   const auth = useAuthStore()
   await auth.restore()
 
-  if ((to.name === 'login' || to.name === 'register') && auth.isAuthenticated) {
-    return { name: 'login', replace: true }
+  // Already signed in and on the login page. Sends them somewhere useful rather
+  // than back to login, which would be a navigation to the page they are on.
+  if (to.name === 'login' && auth.isAuthenticated) {
+    return { path: '/marketplaces/list', replace: true }
   }
 
   if (to.meta.requiresAdmin) {

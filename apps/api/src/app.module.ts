@@ -7,7 +7,7 @@ import { env } from './config/env'
 import { MarketplaceModule } from './modules/marketplace/marketplace.module'
 import { HealthModule } from './modules/health/health.module'
 import { AuthModule } from './modules/auth/auth.module'
-import { AccountEntity, SessionEntity } from './modules/auth/entities'
+import { AccountEntity, SessionEntity, AccountIdentityEntity } from './modules/auth/entities'
 import { SyncModule } from './modules/sync/sync.module'
 import { SyncStateEntity } from './modules/sync/entities'
 import { CommonModule } from './common/common.module'
@@ -31,6 +31,7 @@ export const ENTITIES = [
   MarketplaceTokenTransferEntity,
   AccountEntity,
   SessionEntity,
+  AccountIdentityEntity,
   SyncStateEntity,
 ]
 

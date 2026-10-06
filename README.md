@@ -39,10 +39,11 @@ pnpm dev                      # API on :8080 with watch mode
 pnpm dev:web                  # Vite on :5173, proxying /api to :8080
 ```
 
-The API runs migrations on first boot, so the schema appears by itself, and
-`ADMIN_USERNAME` / `ADMIN_PASSWORD` seed the first admin. The database starts
-**empty** — sign in as that admin and use **Sync Full** to populate it, otherwise
-the marketplace list will look broken when it is just untested.
+The API runs migrations on first boot, so the schema appears by itself. Sign-in is
+Google-only — there is no password account — so set `GOOGLE_ADMIN_EMAILS` to your own
+verified address or the first login will produce a plain user and `/admin/data` will
+403. The database starts **empty** — sign in and use **Sync Full** to populate it,
+otherwise the marketplace list will look broken when it is just untested.
 
 ```bash
 pnpm db:status                # container health, then schema + row counts
@@ -320,7 +321,11 @@ Measured build times on a local machine, for reference:
 
 Also before the first deploy:
 
-1. Set `ADMIN_PASSWORD` in `.drone.yml` (it ships as `CHANGE_ME_BEFORE_FIRST_DEPLOY`).
+1. Replace the four `CHANGE_ME` values in `.drone.yml`: `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (the Console's authorized redirect
+   URI, exactly) and `GOOGLE_ADMIN_EMAILS` (comma-separated verified addresses).
+   They cannot be set by hand on the box — the pipeline truncates `.env` on every
+   deploy — so anything missing here disables Google and locks out all sign-in.
 2. Confirm the PostgreSQL login from the DOM Cloud Manage tab matches
    `$USERNAME` / `$PGPASSWD`.
 

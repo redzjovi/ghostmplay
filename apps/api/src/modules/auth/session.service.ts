@@ -12,7 +12,6 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 export interface AuthenticatedAccount {
   id: number
-  username: string
   role: AccountRole
 }
 
@@ -65,8 +64,8 @@ export class SessionService {
       return null
     }
 
-    const { id, username, role } = session.account
-    return { id, username, role }
+    const { id, role } = session.account
+    return { id, role }
   }
 
   async destroy(token: string | undefined, res: Response, secure: boolean): Promise<void> {

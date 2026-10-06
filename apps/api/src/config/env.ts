@@ -1,4 +1,5 @@
 import { config as loadEnv } from 'dotenv'
+import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 
@@ -54,6 +55,48 @@ const webRootCandidates = [
   '/app/public',
 ].filter((p): p is string => typeof p === 'string' && p.length > 0)
 
+/**
+ * Google sign-in. All three are optional and read without `required()` on purpose:
+ * an absent value must not stop the API from booting, otherwise upgrading would
+ * break every deployment that has not configured Google yet. When any of them is
+ * missing the feature is simply off and the button is hidden.
+ *
+ * GOOGLE_REDIRECT_URI is explicit rather than derived from a public base URL
+ * because it has to match the Cloud Console entry byte for byte, and a wrong host
+ * only fails at Google's end, after the user has already been redirected away.
+ */
+const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim()
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim()
+const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI?.trim()
+
+/**
+ * Who is allowed to be an admin, as verified Google addresses. Comma-separated,
+ * compared case-insensitively because that is how addresses behave.
+ *
+ * This is the *only* thing that grants admin — there is no password account left —
+ * so an empty list means the deployment can never have one. main.ts warns about that
+ * rather than failing: an operator may deliberately run this read-only for a while,
+ * but they need to be told, not left wondering why /admin/data 403s.
+ *
+ * Safe to derive authority from an address because the ID token is only accepted
+ * when `email_verified` is true, Google guarantees a single account holds any given
+ * address, and this value is chosen by whoever has the environment anyway.
+ */
+const googleAdminEmails = (process.env.GOOGLE_ADMIN_EMAILS ?? '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean)
+
+/**
+ * HMAC key for the signed OAuth `state`. Falls back to a key derived from the
+ * client secret so there is no third mandatory secret to provision; the explicit
+ * variable exists for rotating the state key without rotating the OAuth client.
+ */
+const googleStateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET?.trim()
+  || (googleClientSecret
+    ? createHash('sha256').update(`gm-oauth-state\0${googleClientSecret}`).digest('hex')
+    : undefined)
+
 export const env = {
   isProd,
   nodeEnv: process.env.NODE_ENV ?? 'development',
@@ -75,11 +118,19 @@ export const env = {
   webRoot: webRootCandidates.find((p) => existsSync(p)),
 
   /**
-   * Seeded once on first boot if no admin exists yet, so the env vars can be
-   * removed afterwards. Registration itself stays open to everyone.
+   * Google is the only way in: the password form, the register endpoint and the
+   * ADMIN_USERNAME / ADMIN_PASSWORD bootstrap are all gone.
    */
-  adminUsername: process.env.ADMIN_USERNAME,
-  adminPassword: process.env.ADMIN_PASSWORD,
+  google: {
+    clientId: googleClientId,
+    clientSecret: googleClientSecret,
+    redirectUri: googleRedirectUri,
+    stateSecret: googleStateSecret,
+    /** Verified addresses allowed to hold role='admin'. Empty = nobody. */
+    adminEmails: googleAdminEmails,
+    /** All three are needed before the endpoints will do anything. */
+    enabled: Boolean(googleClientId && googleClientSecret && googleRedirectUri && googleStateSecret),
+  },
 
   /** Valkey/Redis for rate limiting. Absent means rate limiting is disabled. */
   redisUrl: process.env.REDIS_URL,

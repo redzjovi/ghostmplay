@@ -95,12 +95,12 @@
         </router-link>
       </div>
     </nav>
-    <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed && 'justify-center'">
+    <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed ? 'justify-center' : 'justify-between'">
       <div class="flex min-w-0 items-center gap-2">
         <ThemeToggle />
         <template v-if="!isCollapsed && auth.account">
-          <div class="min-w-0 flex-1 truncate text-xs text-muted-foreground" :title="auth.account.username">
-            {{ auth.account.username }}
+          <div class="min-w-0 flex-1 truncate text-xs text-muted-foreground" :title="accountLabel">
+            {{ accountLabel }}
             <span v-if="auth.isAdmin" class="ml-1 text-[10px] uppercase tracking-wide text-primary">admin</span>
           </div>
           <Button
@@ -159,6 +159,14 @@ const isDataActive = computed(() => route.path.startsWith('/admin'))
 
 const favStore = useFavoritesStore()
 const favoriteCount = computed(() => favStore.favorites.length)
+/**
+ * What to show as "who am I".
+ *
+ * Google is the only sign-in, so the verified address is the identifier and there is
+ * no username to prefer over it. 'Account' only covers a theoretically email-less
+ * session, which the ID token would not produce.
+ */
+const accountLabel = computed(() => auth.account?.email ?? 'Account')
 onMounted(() => {
   // Favorites are per-account, so only fetch once we know who is signed in.
   if (auth.isAuthenticated) favStore.fetchFavorites().catch(() => {})

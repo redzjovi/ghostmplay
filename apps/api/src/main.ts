@@ -41,11 +41,25 @@ async function bootstrap(): Promise<void> {
 
   await app.listen(env.port, '0.0.0.0')
 
-  // Seeding is a no-op once an admin exists, so the env vars can be removed
-  // after the first successful boot.
+  // Admin is granted per sign-in from GOOGLE_ADMIN_EMAILS rather than seeded, so
+  // there is nothing to bootstrap here — only expired sessions to sweep.
   const auth = app.get(AuthService, { strict: false })
-  await auth.bootstrapAdmin(env.adminUsername, env.adminPassword)
   await auth.purgeExpiredSessions()
+
+  // Admin comes from GOOGLE_ADMIN_EMAILS and nothing else now — there is no password
+  // account left — so both of these are silent lockouts that need saying out loud
+  // rather than being discovered as a 403 on /admin/data.
+  if (!env.google.enabled) {
+    logger.warn(
+      'Google sign-in is not configured: nobody can sign in at all. ' +
+        'Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI.'
+    )
+  } else if (env.google.adminEmails.length === 0) {
+    logger.warn(
+      'GOOGLE_ADMIN_EMAILS is empty: visitors can sign in but no account can become admin. ' +
+        'Add the verified Google address allowed to reach /admin/data.'
+    )
+  }
 
   logger.log(`ghostmplay-api listening on :${env.port} (${env.nodeEnv})`)
   logger.log(env.webRoot ? `Serving web build from ${env.webRoot}` : 'No web build found — API only')

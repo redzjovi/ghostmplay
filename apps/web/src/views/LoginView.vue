@@ -2,95 +2,92 @@
   <div class="min-h-screen bg-background text-foreground grid place-items-center px-4">
     <Card class="w-full max-w-sm">
       <CardHeader>
-        <CardTitle class="text-xl">{{ isRegister ? 'Create an account' : 'Sign in' }}</CardTitle>
-        <CardDescription>
-          {{ isRegister ? 'Save favorite searches and follow the market.' : 'Sign in to reach your saved searches.' }}
-        </CardDescription>
+        <CardTitle class="text-xl">Sign in</CardTitle>
+        <CardDescription>Save favorite searches and follow the market.</CardDescription>
       </CardHeader>
 
       <CardContent>
-        <form class="space-y-3" @submit.prevent="submit">
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-muted-foreground" for="username">Username</label>
-            <Input
-              id="username"
-              v-model="username"
-              autocomplete="username"
-              autocapitalize="none"
-              spellcheck="false"
-              :disabled="auth.loading"
-              placeholder="lowercase, 3-32 characters"
-            />
-          </div>
-
-          <div class="space-y-1.5">
-            <label class="text-xs font-medium text-muted-foreground" for="password">Password</label>
-            <Input
-              id="password"
-              v-model="password"
-              type="password"
-              :autocomplete="isRegister ? 'new-password' : 'current-password'"
-              :disabled="auth.loading"
-              placeholder="at least 8 characters"
-            />
-          </div>
-
-          <Alert v-if="auth.error" variant="destructive">
-            <AlertDescription>{{ auth.error }}</AlertDescription>
-          </Alert>
-
-          <Button type="submit" class="w-full" :disabled="auth.loading">
-            <Loader2 v-if="auth.loading" class="mr-2 h-4 w-4 animate-spin" />
-            {{ isRegister ? 'Create account' : 'Sign in' }}
+        <!-- Google is the only way in: no username, no password, no register. -->
+        <div v-if="googleEnabled" class="space-y-3">
+          <Button variant="outline" class="w-full gap-2" @click="startGoogle">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.45a5.5 5.5 0 0 1-2.39 3.62v3h3.86c2.26-2.08 3.58-5.15 3.58-8.81Z" />
+              <path fill="#34A853" d="M12 24c3.24 0 5.96-1.08 7.94-2.91l-3.86-3c-1.08.72-2.45 1.15-4.08 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.1A12 12 0 0 0 12 24Z" />
+              <path fill="#FBBC05" d="M5.27 14.28a7.2 7.2 0 0 1 0-4.56v-3.1H1.29a12 12 0 0 0 0 10.76l3.98-3.1Z" />
+              <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.43-3.43C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.29 6.62l3.98 3.1C6.22 6.86 8.87 4.75 12 4.75Z" />
+            </svg>
+            Continue with Google
           </Button>
 
           <p class="text-center text-xs text-muted-foreground">
-            <template v-if="isRegister">
-              Already have an account?
-              <RouterLink class="underline underline-offset-4" :to="{ name: 'login' }">Sign in</RouterLink>
-            </template>
-            <template v-else>
-              No account yet?
-              <RouterLink class="underline underline-offset-4" :to="{ name: 'register' }">Create one</RouterLink>
-            </template>
+            Your account is tied to your Google address — there is no password to
+            forget or reset.
           </p>
-        </form>
+        </div>
+
+        <!-- There is no second sign-in method to fall back to, so an unconfigured
+             deployment must say so rather than render an empty card. -->
+        <Alert v-else>
+          <AlertDescription>
+            Google sign-in is not available on this deployment. Set
+            <span class="font-mono">GOOGLE_CLIENT_ID</span>,
+            <span class="font-mono">GOOGLE_CLIENT_SECRET</span> and
+            <span class="font-mono">GOOGLE_REDIRECT_URI</span> to enable it.
+          </AlertDescription>
+        </Alert>
+
+        <Alert v-if="message" variant="destructive" class="mt-3">
+          <AlertDescription>{{ message }}</AlertDescription>
+        </Alert>
       </CardContent>
     </Card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { Loader2 } from 'lucide-vue-next'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const route = useRoute()
-const router = useRouter()
 
-// One component serves both routes; the name decides the copy and the call.
-const isRegister = computed(() => route.name === 'register')
+const googleEnabled = ref(false)
 
-const username = ref('')
-const password = ref('')
+/**
+ * Codes the API redirects back with on a failed Google attempt. Mapped to copy
+ * rather than shown raw, so nothing from Google or from an exception reaches the
+ * UI unescaped.
+ */
+const GOOGLE_ERRORS: Record<string, string> = {
+  oauth_denied: 'Google sign-in was cancelled.',
+  oauth_state: 'That sign-in link expired or could not be verified. Please try again.',
+  oauth_unverified: 'That Google account has no verified email address.',
+  oauth_throttled: 'Too many sign-in attempts from this network. Please try again shortly.',
+  oauth_failed: 'Google sign-in failed. Please try again.',
+  oauth_disabled: 'Google sign-in is not available.',
+}
 
-async function submit() {
-  const next = typeof route.query.next === 'string' ? route.query.next : '/marketplaces/list'
-  try {
-    if (isRegister.value) {
-      await auth.register(username.value.trim(), password.value)
-    } else {
-      await auth.login(username.value.trim(), password.value)
-    }
-    await router.replace(next)
-  } catch {
-    // The store already surfaced the message; keep the form mounted.
-  }
+/** Errors come only from the redirect now — there is no form to fail. */
+const message = computed(() => {
+  const code = typeof route.query.oauth === 'string' ? route.query.oauth : ''
+  return code ? GOOGLE_ERRORS[code] ?? GOOGLE_ERRORS.oauth_failed : null
+})
+
+onMounted(async () => {
+  googleEnabled.value = await auth.googleEnabled()
+})
+
+/**
+ * Hands off to Google. `next` rides through the query so the callback can return
+ * the visitor to wherever the guard interrupted them; the API validates it and
+ * falls back to the marketplace list if it is not a same-origin path.
+ */
+function startGoogle() {
+  const next = typeof route.query.next === 'string' ? route.query.next : undefined
+  window.location.assign(window.api.auth.googleStartUrl(next))
 }
 </script>

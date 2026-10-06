@@ -33,10 +33,18 @@ commands:
   - printf 'DATABASE_URL=postgres://%s:%s@10.0.2.2:5432/%s\n' "$USERNAME" "$PGPASSWD" "$DATABASE" > .env
   - printf 'REDIS_URL=redis://%s:%s@10.0.2.2:6379\n' "$DATABASE" "$RDPASSWD" >> .env
   - printf 'NODE_ENV=production\n' >> .env
-  # Seeds the first admin account on first boot only. Once an admin exists this
-  # is a no-op, so these can be deleted from this file after the first deploy.
-  - printf 'ADMIN_USERNAME=admin\n' >> .env
-  - printf 'ADMIN_PASSWORD=CHANGE_ME_BEFORE_FIRST_DEPLOY\n' >> .env
+  # Google sign-in is the ONLY way in: there is no password account and no register
+  # endpoint, so losing these means nobody can sign in at all. They have to be written
+  # here because the `>` above truncates .env on every deploy — anything set by hand
+  # on the box is wiped on the next push. Replace every CHANGE_ME value.
+  #
+  # REDIRECT_URI must match the Console's authorized redirect URI exactly, and
+  # ADMIN_EMAILS is a comma-separated list of verified Google addresses allowed to
+  # hold role=admin; leave it non-empty or /admin/data stays unreachable.
+  - printf 'GOOGLE_CLIENT_ID=CHANGE_ME_BEFORE_FIRST_DEPLOY\n' >> .env
+  - printf 'GOOGLE_CLIENT_SECRET=CHANGE_ME_BEFORE_FIRST_DEPLOY\n' >> .env
+  - printf 'GOOGLE_REDIRECT_URI=CHANGE_ME_ORIGIN/api/auth/google/callback\n' >> .env
+  - printf 'GOOGLE_ADMIN_EMAILS=CHANGE_ME_ADDRESS\n' >> .env
   - chmod 600 .env
 
 # The image is built here, on the server. There is no registry.
