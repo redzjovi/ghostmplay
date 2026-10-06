@@ -1,15 +1,15 @@
 <template>
   <div class="min-h-screen bg-background text-foreground grid place-items-center px-4">
-    <Card class="w-full max-w-sm">
-      <CardHeader>
-        <CardTitle class="text-xl">Sign in</CardTitle>
-        <CardDescription>Save favorite searches and follow the market.</CardDescription>
+    <Card class="w-full max-w-[400px] rounded-2xl shadow-sm dark:bg-secondary">
+      <CardHeader class="items-center p-6 pb-4 text-center sm:p-8 sm:pb-5">
+        <CardTitle class="text-xl leading-tight">Sign in</CardTitle>
+        <CardDescription class="text-center">Save favorite searches and follow the market.</CardDescription>
       </CardHeader>
 
-      <CardContent>
+      <CardContent class="sm:p-8 sm:pt-0">
         <!-- Google is the only way in: no username, no password, no register. -->
-        <div v-if="googleEnabled" class="space-y-3">
-          <Button variant="outline" class="w-full gap-2" @click="startGoogle">
+        <div v-if="googleEnabled" class="space-y-4">
+          <Button variant="outline" class="h-11 w-full gap-3 rounded-lg" @click="startGoogle">
             <svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
               <path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.64h6.45a5.5 5.5 0 0 1-2.39 3.62v3h3.86c2.26-2.08 3.58-5.15 3.58-8.81Z" />
               <path fill="#34A853" d="M12 24c3.24 0 5.96-1.08 7.94-2.91l-3.86-3c-1.08.72-2.45 1.15-4.08 1.15-3.13 0-5.78-2.11-6.73-4.96H1.29v3.1A12 12 0 0 0 12 24Z" />
@@ -19,7 +19,7 @@
             Continue with Google
           </Button>
 
-          <p class="text-center text-xs text-muted-foreground">
+          <p class="text-center text-xs leading-relaxed text-muted-foreground">
             Your account is tied to your Google address — there is no password to
             forget or reset.
           </p>

@@ -1,4 +1,6 @@
 import '@/assets/index.css'
+// Side-effect import: applies the saved (or system) theme on import, before mount.
+import '@/composables/useTheme'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
@@ -10,10 +12,6 @@ import type { WebApi } from './api/http-client'
 // the same-origin /api routes instead of Electron IPC. This is the single seam
 // that would need reimplementing if the UI framework ever changes.
 ;(window as unknown as { api: WebApi }).api = api
-
-// apply theme before mount to avoid FOUC (default light)
-const savedTheme = localStorage.getItem('ghostmplay:theme') as 'light' | 'dark' | null
-document.documentElement.classList.toggle('dark', savedTheme === 'dark')
 
 const app = createApp(App)
 app.use(createPinia())

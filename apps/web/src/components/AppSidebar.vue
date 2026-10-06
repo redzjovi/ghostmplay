@@ -82,9 +82,8 @@
       <!-- Admin: scraper controls, which is why it is gated here. The server is the
            real boundary (AdminGuard on /api/admin/sync); hiding the link just keeps
            the nav honest about who can use it. -->
-      <div class="pt-2">
+      <div v-if="auth.isAdmin" class="pt-2">
         <router-link
-          v-if="auth.isAdmin"
           to="/admin/data"
           class="flex items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground md:px-3"
           :class="isDataActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
@@ -94,10 +93,20 @@
           <span v-show="!isCollapsed" class="hidden truncate md:block">Data</span>
         </router-link>
       </div>
+      <div class="pt-2">
+        <router-link
+          to="/settings"
+          class="flex items-center gap-3 rounded-md px-2 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground md:px-3"
+          :class="isSettingsActive ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground'"
+          :title="isCollapsed ? 'Settings' : undefined"
+        >
+          <Settings class="h-4 w-4 shrink-0" />
+          <span v-show="!isCollapsed" class="hidden truncate md:block">Settings</span>
+        </router-link>
+      </div>
     </nav>
-    <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed ? 'justify-center' : 'justify-between'">
+    <div class="mt-auto flex items-center gap-2 p-2 md:p-3" :class="isCollapsed && 'justify-center'">
       <div class="flex min-w-0 items-center gap-2">
-        <ThemeToggle />
         <template v-if="!isCollapsed && auth.account">
           <div class="min-w-0 flex-1 truncate text-xs text-muted-foreground" :title="accountLabel">
             {{ accountLabel }}
@@ -137,8 +146,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, List, Star, History, Database, LogIn, LogOut } from 'lucide-vue-next'
-import ThemeToggle from '@/components/ThemeToggle.vue'
+import { Gamepad2, Store, PanelLeftClose, PanelLeftOpen, List, Star, History, Database, LogIn, LogOut, Settings } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useFavoritesStore } from '@/stores/favorites'
@@ -156,6 +164,7 @@ const isFavoriteActive = computed(() => {
 })
 const isListActive = computed(() => route.path === '/marketplaces/list' || (isMarketplace.value && !isFavoriteActive.value && !route.path.startsWith('/items')))
 const isDataActive = computed(() => route.path.startsWith('/admin'))
+const isSettingsActive = computed(() => route.path.startsWith('/settings'))
 
 const favStore = useFavoritesStore()
 const favoriteCount = computed(() => favStore.favorites.length)

@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background text-foreground flex">
-    <AppSidebar />
-    <main class="flex-1 min-w-0 pb-8">
+    <AppSidebar v-if="!route.meta.bare" />
+    <main class="flex-1 min-w-0" :class="{ 'pb-8': !route.meta.bare }">
       <router-view />
     </main>
     <!-- Debug: current full URL (hash history) -->

@@ -2,17 +2,29 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    /**
+     * Renders the route without the app shell: no left sidebar, no bottom
+     * padding on the main column. Set on full-screen pages such as login, where
+     * navigation would only get in the way of the single action on the page.
+     */
+    bare?: boolean
+  }
+}
+
 const router = createRouter({
   history: createWebHistory(),
   scrollBehavior,
   routes: [
     { path: '/', redirect: '/marketplaces/list' },
     { path: '/marketplace', redirect: '/marketplaces/list' },
-    { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true } },
+    { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true, bare: true } },
     { path: '/marketplaces/list', component: () => import('../views/MarketplaceView.vue'), meta: { public: true } },
     { path: '/marketplaces/favorites', component: () => import('../views/MarketplaceView.vue'), meta: { requiresAuth: true } },
     { path: '/history/list', component: () => import('../views/HistoryView.vue'), meta: { public: true } },
     { path: '/items/:tokenId', component: () => import('../views/ItemDetailView.vue'), props: true, meta: { public: true } },
+    { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue'), meta: { public: true } },
     { path: '/admin/data', component: () => import('../views/DataView.vue'), meta: { requiresAdmin: true } }
   ]
 })
@@ -21,7 +33,9 @@ const router = createRouter({
  * Browsing is public: the marketplace list, the history list and item detail are
  * all served by endpoints that take no account, so a signed-out visitor sees the
  * same data. Only per-account and admin surfaces need a session — favorites, and
- * the Data page (whose endpoints the server also rejects with 401/403).
+ * the Data page (whose endpoints the server also rejects with 401/403). Settings
+ * is public for the same reason as browsing: it stores nothing but a local
+ * appearance preference.
  *
  * Gated routes carry `requiresAuth`; login carries `public` so it is
  * reachable at all. Note that `requiresAuth` is documentation only — the guard
