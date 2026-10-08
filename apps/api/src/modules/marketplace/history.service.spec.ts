@@ -104,7 +104,7 @@ describe('HistoryService.list', () => {
   it('sorting and pagination', async () => {
     const res = await svc.list({ sort: 'price_asc', page: 0, limit: 200 })
     expect(res.page).toBe(1)
-    expect(res.limit).toBe(100)
+    expect(res.limit).toBe(120)
     expect(qb.orderBy).toHaveBeenCalledWith('t.price', 'ASC')
   })
 

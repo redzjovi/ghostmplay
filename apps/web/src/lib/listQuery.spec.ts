@@ -198,6 +198,16 @@ describe('history codec', () => {
     expect(historyStateFromQuery({ q: 'a', itemName: 'b' }).itemName).toBe('b')
   })
 
+  it('falls back to the default for a limit that left the offered list', () => {
+    // 100 was offered before 120 replaced it. resolveLimit rejects off-list
+    // values rather than trusting them, so an old bookmark or a saved
+    // preference of 100 lands on the default rather than being honoured.
+    expect(HISTORY_PAGE_SIZES).not.toContain(100 as never)
+    expect(historyStateFromQuery({ limit: '100' }).limit).toBe(HISTORY_DEFAULT_LIMIT)
+    expect(historyStateFromQuery({}, '100').limit).toBe(HISTORY_DEFAULT_LIMIT)
+    expect(historyStateFromQuery({ limit: '120' }).limit).toBe(120)
+  })
+
   it('normalises an unknown claimed filter and a bad date', () => {
     expect(historyStateFromQuery({ claimed: 'maybe' }).claimed).toBe('all')
     expect(historyStateFromQuery({ createdFrom: 'oops' }).createdFrom).toBe('')
@@ -214,7 +224,7 @@ describe('history codec', () => {
 
   it('round-trips a non-default state', () => {
     const s: HistoryListState = {
-      page: 5, limit: 100, sort: 'price_desc', seller: '0xa', buyer: '0xb', sellerName: 'herwan', buyerName: 'zed',
+      page: 5, limit: 120, sort: 'price_desc', seller: '0xa', buyer: '0xb', sellerName: 'herwan', buyerName: 'zed',
       itemName: 'Gold Box', tokenId: '4949', txHash: '0xdead', priceMin: '10', priceMax: '1000',
       createdFrom: '2026-01-01', createdTo: '2026-02-01', claimed: 'unclaimed',
     }

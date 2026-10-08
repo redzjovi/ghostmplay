@@ -17,7 +17,7 @@ export const MARKET_PAGE_SIZES = [12, 24, 48, 96] as const
 export const MARKET_DEFAULT_LIMIT = 12
 export const MARKET_LIMIT_KEY = 'ghostmplay:marketplace:limit'
 
-export const HISTORY_PAGE_SIZES = [15, 30, 60, 100] as const
+export const HISTORY_PAGE_SIZES = [15, 30, 60, 120] as const
 export const HISTORY_DEFAULT_LIMIT = 15
 export const HISTORY_LIMIT_KEY = 'ghostmplay:history:limit'
 

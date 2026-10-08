@@ -24,7 +24,7 @@ export class HistoryListQueryDto implements HistoryListQuery {
   @Transform(toOptionalInt)
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(120)
   limit?: number
 
   /** Matches either the wallet address or the username. */

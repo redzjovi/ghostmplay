@@ -57,7 +57,7 @@ export class HistoryService {
 
   async list(query: HistoryListQuery = {}) {
     const page = Math.max(1, query.page ?? 1)
-    const limit = Math.min(100, Math.max(1, query.limit ?? 15))
+    const limit = Math.min(120, Math.max(1, query.limit ?? 15))
     const skip = (page - 1) * limit
 
     const qb = this.transferRepo.createQueryBuilder('t')
