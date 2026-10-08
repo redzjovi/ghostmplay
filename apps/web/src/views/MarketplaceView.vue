@@ -344,7 +344,7 @@
           </div>
           <div v-else class="grid gap-2 grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
             <Card v-for="fav in favStore.favorites" :key="fav.id" class="px-2.5 py-2 flex flex-col gap-1">
-              <button class="text-left text-sm font-medium truncate hover:underline hover:text-primary" :title="fav.name" @click="viewFavorite(fav)">{{ fav.name }}</button>
+              <router-link :to="favoriteRoute(fav)" class="text-left text-sm font-medium truncate hover:underline hover:text-primary" :title="fav.name">{{ fav.name }}</router-link>
               <div class="text-[11px] text-muted-foreground leading-none">{{ formatDateTime(fav.createdAt) }}</div>
               <div class="flex flex-col gap-0.5 text-xs leading-tight pt-0.5">
                 <div class="truncate"><span class="text-muted-foreground">Equipment type:</span> {{ fav.equipmentTypes.length ? fav.equipmentTypes.join(', ') : '—' }}</div>
@@ -714,22 +714,26 @@ async function onSaveFavorite(name:string){
     alert(msg)
   }
 }
-async function viewFavorite(fav: MarketplaceFavorite){
-  selectedFavorite.value = fav
-  origFavoriteSnapshot.value = {
-    q: fav.q ?? null,
-    equipmentTypes: [...(fav.equipmentTypes ?? [])],
-    gradeEffects: [...(fav.gradeEffects ?? [])],
-    sort: fav.sort ?? 'recent',
+/**
+ * Where a favorite lives: the favorites route carrying that favorite's own
+ * filters. Rendered as a router-link `to` so the browser gets a real href and
+ * open-in-new-tab, middle click and ctrl/cmd click all work, while a plain click
+ * stays a same-tab push. The route watcher re-derives the selected favorite from
+ * this URL, so nothing needs to be set here.
+ */
+function favoriteRoute(fav: MarketplaceFavorite){
+  return {
+    path: '/marketplaces/favorites',
+    query: buildMarketQuery({
+      ...currentState(),
+      page: 1,
+      fav: fav.id,
+      q: fav.q ?? '',
+      equipmentType: joinCsv(fav.equipmentTypes ?? []),
+      gradeEffect: joinCsv(fav.gradeEffects ?? []),
+      sort: (fav.sort as MarketSort) ?? 'recent',
+    }),
   }
-  commit({
-    page: 1,
-    fav: fav.id,
-    q: fav.q ?? '',
-    equipmentType: joinCsv(fav.equipmentTypes ?? []),
-    gradeEffect: joinCsv(fav.gradeEffects ?? []),
-    sort: (fav.sort as MarketSort) ?? 'recent',
-  }, { path: '/marketplaces/favorites' })
 }
 async function updateFavorite(){
   if (!selectedFavorite.value || !isFavoriteDirty.value) return
