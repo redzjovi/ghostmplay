@@ -9,37 +9,33 @@
 #
 # `make dev` falls back to a single build-and-run when air is absent, so a
 # missing tool costs you reloads rather than the ability to start the server.
+#
+# Everything else is left at air's defaults. A setting here that restates a
+# default is a comment waiting to become a lie.
 
 root = "."
 tmp_dir = "tmp"
 
 [build]
-# cmd is the build. entrypoint is the binary air then runs, and replaces the
-# deprecated `bin` key -- it is NOT the build command.
+# cmd is the build; entrypoint is the binary air then runs. entrypoint replaces
+# the deprecated `bin` key and is NOT the build command.
 cmd = "go build -o bin/api ./cmd/api"
 entrypoint = ["bin/api"]
 
-# db/sqlc is excluded because it is generated: `make generate` rewrites it, and
-# air watching it would mean a query change triggers a rebuild that itself
-# rewrites watched files. Editing db/queries/*.sql still rebuilds, which is the
-# behaviour that matters. Test files are excluded for the same reason -- changing
-# one should not restart the server.
+# db/sqlc is excluded because it is generated: `make generate` rewrites it, so
+# watching it would make a query change trigger a rebuild that itself rewrites
+# watched files. Editing db/queries/*.sql still rebuilds, which is the behaviour
+# that matters -- the query is the source, db/sqlc is the output.
+#
+# Test files are excluded because changing one is not a reason to restart a
+# server you are holding a request against.
 exclude_dir = ["node_modules", "bin", "tmp", "public", "db/sqlc"]
 exclude_regex = ["_test\\.go$"]
 
-# .sql and .yaml are included because a migration or query change really does
-# change what the process does, and should restart it.
+# .sql and .yaml are watched because a migration or a query change really does
+# change what the process does.
 include_ext = ["go", "sql", "yaml", "yml", "toml"]
 
-# One rebuild at a time, queued behind whatever is already running. Without
-# this, saving a file that triggers a sqlc-regenerating step can start two
-# overlapping rebuilds.
-stop_on_error = true
-send_interrupt = false
-kill_delay = "0ms"
-
-[log]
-time = true
-
-[misc]
-clean_on_exit = true
+# Debounce, so a burst of saves from a formatter or a branch switch produces one
+# rebuild rather than one per file.
+delay = 100
