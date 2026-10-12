@@ -22,7 +22,11 @@ list is populated by what the host has installed, and on AlmaLinux that means th
 `ea-nodejs22` package. Without it the list stops at 20 and the app cannot run —
 it needs Node 22 (`engines` in `package.json`).
 
-`ls /opt/cpanel/` over SSH lists what is there.
+```bash
+ls /opt/cpanel/       # ea-phpNN, ea-nodejsNN — which versions exist?
+node -v
+which corepack        # ships with Node 22; section 2.1 forks on this
+```
 
 ### 0.2 PostgreSQL, and no extension required
 
@@ -71,18 +75,88 @@ works just as well if you would rather not use the panel.
 
 ---
 
-## 2. Build the artifact
+## 2. Install pnpm and build the artifact
+
+### 2.1 Install pnpm
+
+Node 22 ships corepack, which installs exactly the version `package.json` pins
+(`"packageManager": "pnpm@11.6.0"`) — so there is nothing to keep in sync with the
+lockfile by hand.
+
+```bash
+mkdir -p ~/.local/bin
+corepack enable --install-directory ~/.local/bin pnpm
+export PATH="$HOME/.local/bin:$PATH"
+pnpm --version          # 11.6.0
+```
+
+`corepack enable pnpm` on its own fails here: it writes the shim next to the
+`corepack` binary, which lives under the root-owned `/opt/cpanel` install, and
+there is nowhere to put it. `--install-directory ~/.local/bin` writes it somewhere
+you own instead.
+
+The first `pnpm` run downloads that version into `COREPACK_HOME` (default
+`~/.cache/node/corepack`), so that path has to be writable — set
+`export COREPACK_HOME=~/.corepack` if it is not.
+
+If `which corepack` from section 0.1 came back empty, that Node build has no
+corepack. Use npm instead:
+
+```bash
+npm config set prefix ~/.npm-global
+npm install -g pnpm@11.6.0
+export PATH="$HOME/.npm-global/bin:$PATH"
+```
+
+That writes to your own `~/.npmrc`, which is a different file from the
+repository's `.npmrc` (the one holding `node-linker=hoisted`). Nothing in the
+repository changes.
+
+Not installing anything is fine too: `npx --yes pnpm@11.6.0 <command>` runs the
+same version every time, without persisting it.
+
+### 2.2 PATH, or why it does not matter
+
+Each cPanel Terminal is a fresh login shell, so the `export` above disappears when
+the session ends. Add it to `~/.bashrc`, then check that the profile actually
+reads it:
+
+```bash
+grep -n bashrc ~/.bash_profile
+```
+
+It only ever affects your shell. **Passenger never runs pnpm** — `release/` is
+plain files plus a `node_modules` — so if PATH will not stick, call the absolute
+path (`~/.local/bin/pnpm release`) and the running site is unaffected either way.
+
+### 2.3 Disk, before the first build
+
+The first `pnpm install` writes about 164 MB of dev `node_modules`, plus the pnpm
+content-addressable store, and then the 136 MB `release/`.
+
+```bash
+df -h ~ && du -sh ~/.local/share/pnpm 2>/dev/null
+```
+
+`df` reports the filesystem, not your per-account quota, so the disk-usage figure
+in the cPanel panel is the number that actually matters. If space is tight,
+`pnpm store prune` after a successful build, or move the store with
+`pnpm config set store-dir <path>`.
+
+### 2.4 Build
 
 ```bash
 cd ~/ghostmplay
-npx --yes pnpm@11.6.0 install --frozen-lockfile
-npx --yes pnpm@11.6.0 release
+pnpm install --frozen-lockfile
+pnpm release
 ```
 
-`corepack enable pnpm` usually fails on cPanel: the Node install lives under
-`/opt/cpanel` and is root-owned, so there is nowhere to write the shim. `npx` with
-an explicit version sidesteps that and pins the same 11.6.0 the lockfile was
-generated with.
+Two things that pre-empt the usual questions. `--frozen-lockfile` makes pnpm
+**fail** rather than rewrite the lockfile if `package.json` and `pnpm-lock.yaml`
+disagree, which is what you want on a server. And postinstall scripts are already
+permitted by the `allowBuilds` list in `pnpm-workspace.yaml`, so pnpm 11 will not
+prompt — there are no native modules in the tree, so no compiler is needed here
+either.
 
 `pnpm release` leaves a self-contained directory:
 
@@ -261,8 +335,8 @@ Then, in a browser:
 ```bash
 cd ~/ghostmplay
 git pull
-npx --yes pnpm@11.6.0 install --frozen-lockfile
-npx --yes pnpm@11.6.0 release
+pnpm install --frozen-lockfile
+pnpm release
 touch release/tmp/restart.txt
 ```
 
