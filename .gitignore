@@ -1,5 +1,4 @@
 node_modules
-release
 dist
 build
 .output
@@ -14,6 +13,13 @@ build
 *.sqlite3
 .DS_Store
 
-# Local copy of the built web app, used to serve the SPA from the API process
-# during development. In production it is release/public, inside the artifact.
+# A copy of the built web app placed beside the API binary, so the Go process can
+# serve the SPA from one origin during development. In production this is what
+# WEB_ROOT points at instead.
 apps/api/public
+
+# Go build output. The binary is not committed; the source is.
+/apps/api/bin
+
+# sqlc output IS committed (db/sqlc). A deploy target needs nothing but a Go
+# toolchain, so the generated code cannot depend on sqlc being installed there.

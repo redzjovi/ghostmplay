@@ -2,14 +2,14 @@
   "name": "ghostmplay",
   "version": "0.1.0",
   "private": true,
-  "description": "ghostmplay marketplace — NestJS API + Vue 3 web, deployed to cPanel with Node.js Selector",
+  "description": "ghostmplay marketplace \u2014 Go API + Vue 3 web",
   "packageManager": "pnpm@11.6.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm --filter @ghostmplay/api dev",
-    "dev:api": "pnpm --filter @ghostmplay/api dev",
+    "dev": "pnpm dev:api",
+    "dev:api": "make -C apps/api dev",
     "dev:web": "pnpm --filter @ghostmplay/web dev",
     "db:up": "bash scripts/dev-services.sh up",
     "db:down": "bash scripts/dev-services.sh down",
@@ -17,20 +17,23 @@
     "db:nuke": "bash scripts/dev-services.sh nuke",
     "db:status": "bash scripts/dev-services.sh status",
     "db:logs": "bash scripts/dev-services.sh logs",
-    "build": "pnpm -r --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/web build && pnpm --filter @ghostmplay/api build",
-    "build:api": "pnpm --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/api build",
-    "release": "node scripts/release.mjs",
-    "start": "pnpm --filter @ghostmplay/api start:prod",
-    "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r --if-present lint",
-    "test": "vitest run",
+    "build": "pnpm build:web && pnpm build:api",
+    "build:web": "pnpm --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/web build",
+    "build:api": "make -C apps/api build",
+    "start": "apps/api/bin/api",
+    "typecheck": "pnpm --filter @ghostmplay/shared typecheck && pnpm --filter @ghostmplay/web typecheck",
+    "lint": "pnpm --filter @ghostmplay/shared lint && pnpm --filter @ghostmplay/web lint && make -C apps/api lint",
+    "test": "make -C apps/api test && pnpm test:web",
+    "test:web": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "typeorm": "pnpm --filter @ghostmplay/api typeorm",
-    "migration:generate": "pnpm --filter @ghostmplay/api migration:generate",
-    "migration:run": "pnpm --filter @ghostmplay/api migration:run"
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "sqlc": "make -C apps/api generate",
+    "migration:up": "make -C apps/api migrate-up",
+    "migration:force": "make -C apps/api migrate-force"
   },
   "devDependencies": {
+    "pg": "^8.13.1",
     "typescript": "^5.9.3",
     "vitest": "3.2.4"
   }

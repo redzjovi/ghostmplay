@@ -2,13 +2,13 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-# Required by `pnpm deploy`, which assembles the release artifact's node_modules.
-# Workspace packages are hard-linked instead of symlinked so the deployed output
-# is self-contained and does not depend on the monorepo layout.
+# Required by `pnpm deploy`, which assembles the web artifact's node_modules.
+# Workspace packages are hard-linked instead of symlinked so the output is
+# self-contained and does not depend on the monorepo layout.
 # Note: pnpm 11 reads this key in camelCase here, not the kebab-case name.
 injectWorkspacePackages: true
 
 allowBuilds:
-  '@nestjs/core': true
+  '@nestjs/core': set this to true or false
   esbuild: true
   vue-demi: true

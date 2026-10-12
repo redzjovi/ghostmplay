@@ -15,8 +15,8 @@
 # only to add the two things compose has no concept of — recreating a database
 # in place, and checking the app's connection string against the compose file.
 #
-# This file is the local development path only. Production runs on cPanel as a
-# Node process with its own PostgreSQL.
+# This file is the local development path only. The deployed service runs in a
+# container on Voroa against a managed PostgreSQL.
 
 set -euo pipefail
 

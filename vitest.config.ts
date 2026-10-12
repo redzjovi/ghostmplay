@@ -1,22 +1,20 @@
 import { defineConfig } from 'vitest/config'
 import { resolve } from 'path'
 
+// The API is Go. These specs cover what the Go rewrite did not change: the web
+// app's URL codec, formatters and adapters, plus the shared type contract.
+//
+// The API's own tests run through `go test` -- see the `test` script in
+// package.json, which runs both. A single test command for the whole repo means
+// neither suite can be quietly skipped.
 export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['apps/api/src/**/*.spec.ts', 'apps/web/src/**/*.spec.ts'],
-    // config/env.ts throws at import time when DATABASE_URL is unset, and
-    // auth.controller.spec.ts imports a controller. No test opens a connection,
-    // so a syntactically valid dummy is enough to keep the suite hermetic — it
-    // also means the suite passes on a build box that has no .env, which is
-    // exactly the case for the cPanel deploy gate in scripts/release.mjs.
-    env: {
-      DATABASE_URL: 'postgres://ghostmplay:ghostmplay@127.0.0.1:5432/ghostmplay_test',
-    },
+    include: ['apps/web/src/**/*.spec.ts'],
     coverage: {
       provider: 'v8',
-      include: ['apps/api/src/modules/marketplace/**/*', 'packages/shared/src/**/*'],
+      include: ['apps/web/src/lib/**/*', 'packages/shared/src/**/*'],
     },
   },
   resolve: {

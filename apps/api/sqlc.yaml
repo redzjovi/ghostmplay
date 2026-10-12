@@ -1,0 +1,25 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: db/schema.sql
+    queries: db/queries
+    gen:
+      go:
+        package: dbgen
+        out: db/sqlc
+        # database/sql rather than sql_package: pgx/v5. pgx's stdlib driver
+        # satisfies this interface, and the generated models are markedly better:
+        # time.Time and sql.NullTime instead of pgtype wrappers, so every call
+        # site in the service layer reads `.Time` rather than unwrapping.
+        #
+        # The driver underneath is still pgx/v5 (see internal/database), so
+        # nothing is given up but the database/sql round-trip, which is noise at
+        # this scale: a pool of five connections serving one user's list view.
+        sql_package: "database/sql"
+        emit_interface: true
+        emit_json_tags: true
+        emit_empty_slices: true
+        # Nullability becomes a pointer for everything except timestamps, where
+        # database/sql's own sql.NullTime is clearer than a bare *time.Time:
+        # it carries the value and its validity in one value.
+        emit_pointers_for_null_types: true

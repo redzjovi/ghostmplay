@@ -9,7 +9,7 @@
 // unix socket would trust the container's own credentials and could not detect a
 // mismatch with .env, which is the whole point of the check.
 //
-// Uses the `pg` driver already installed in apps/api rather than adding a
+// Uses the `pg` driver from the workspace root rather than adding a
 // dependency or requiring a psql binary on the host.
 
 import { createRequire } from 'node:module';
@@ -18,7 +18,7 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const { Client } = createRequire(join(REPO_ROOT, 'apps/api/package.json'))('pg');
+const { Client } = createRequire(join(REPO_ROOT, 'package.json'))('pg');
 
 const MAINTENANCE_DB = 'postgres';
 const CONNECT_TIMEOUT_MS = 5000;
@@ -39,7 +39,7 @@ const INTERESTING_TABLES = [
   'sync_jobs',
 ];
 
-/** Walk up from the repo root looking for the nearest .env, mirroring apps/api/src/config/env.ts. */
+/** Walk up from the repo root looking for the nearest .env, mirroring apps/api/internal/config/env.go. */
 function findEnvFile() {
   let dir = REPO_ROOT;
   for (;;) {

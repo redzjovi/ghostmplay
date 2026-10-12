@@ -1,8 +1,8 @@
 # ghostmplay — LOCAL DEVELOPMENT data services
 #
 # The API runs on the host via `pnpm dev`; only PostgreSQL is containerised. In
-# production this file is never read — production is a Node process on cPanel with
-# PostgreSQL on the same box. Do not rename this file to `docker-compose.yml`.
+# production this file is never read — the deployed service talks to a managed
+# PostgreSQL. Do not rename this file to `docker-compose.yml`.
 #
 #   pnpm db:up      start, wait until healthy
 #   pnpm db:down    stop, KEEP data
@@ -15,8 +15,8 @@ name: ghostmplay-dev
 
 services:
   postgres:
-    # PostgreSQL 17, the same major version cPanel provides, so migrations
-    # behave the same locally as they do in production.
+    # PostgreSQL 17, matching the managed production major version, so
+    # migrations behave the same locally as they do in production.
     image: postgres:17-alpine
     restart: unless-stopped
     environment:

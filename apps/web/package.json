@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "ghostmplay web client — Vue 3 SPA served by the NestJS container",
+  "description": "ghostmplay web client — Vue 3 SPA served by the Go API",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
