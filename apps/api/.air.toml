@@ -1,0 +1,45 @@
+# air — live reload for `make dev`.
+#
+# Checked in rather than passed as command-line flags so the watch rules are
+# visible in a diff, and so a change to what triggers a rebuild is a reviewed
+# change. `make dev` just runs `air`.
+#
+# air is a development tool and is not vendored. Install it with:
+#   go install github.com/air-verse/air@latest
+#
+# `make dev` falls back to a single build-and-run when air is absent, so a
+# missing tool costs you reloads rather than the ability to start the server.
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+# cmd is the build. entrypoint is the binary air then runs, and replaces the
+# deprecated `bin` key -- it is NOT the build command.
+cmd = "go build -o bin/api ./cmd/api"
+entrypoint = ["bin/api"]
+
+# db/sqlc is excluded because it is generated: `make generate` rewrites it, and
+# air watching it would mean a query change triggers a rebuild that itself
+# rewrites watched files. Editing db/queries/*.sql still rebuilds, which is the
+# behaviour that matters. Test files are excluded for the same reason -- changing
+# one should not restart the server.
+exclude_dir = ["node_modules", "bin", "tmp", "public", "db/sqlc"]
+exclude_regex = ["_test\\.go$"]
+
+# .sql and .yaml are included because a migration or query change really does
+# change what the process does, and should restart it.
+include_ext = ["go", "sql", "yaml", "yml", "toml"]
+
+# One rebuild at a time, queued behind whatever is already running. Without
+# this, saving a file that triggers a sqlc-regenerating step can start two
+# overlapping rebuilds.
+stop_on_error = true
+send_interrupt = false
+kill_delay = "0ms"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true

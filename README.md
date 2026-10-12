@@ -36,16 +36,33 @@ is required.
 ## Local development
 
 You need a PostgreSQL. It is defined in `docker-compose.dev.yml` and started with
-`pnpm db:up`, which blocks until it reports healthy. The API itself runs on the
-host. Nothing else: the sync lock and the sign-in throttle are per-process.
+`pnpm db:up`, which blocks until it reports healthy. **The API runs on the host,
+not in a container** — only PostgreSQL is containerised — so `.env` points at the
+host-published `127.0.0.1:5432`. Nothing else: the sync lock and the sign-in
+throttle are per-process.
 
 ```bash
 pnpm install
 cp .env.example .env          # then set DATABASE_URL
 pnpm db:up                    # postgres 17, waits until healthy
-pnpm dev                      # API on :8080
+pnpm dev                      # API on :8080, with live reload
 pnpm dev:web                  # Vite on :5173, proxying /api to :8080
 ```
+
+`pnpm dev` reloads on save via [air](https://github.com/air-verse/air). It is not
+installed for you, because it is a development tool rather than a project
+dependency:
+
+```bash
+go install github.com/air-verse/air@latest
+```
+
+Without it `pnpm dev` still starts the server, it just does not reload, and it
+says so. What to watch is configured in `apps/api/.air.toml` rather than buried
+in the Makefile, so a change to it shows up in a diff. Edits to `.go` and to
+`db/queries/*.sql` both reload; edits to `_test.go` and to the generated
+`db/sqlc` do not, because rebuilding in response to a code generator's own output
+is a loop waiting to happen.
 
 The API runs migrations on first boot, so the schema appears by itself. Sign-in is
 Google-only — there is no password account — so set `GOOGLE_ADMIN_EMAILS` to your own

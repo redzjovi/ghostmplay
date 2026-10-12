@@ -21,5 +21,8 @@ apps/api/public
 # Go build output. The binary is not committed; the source is.
 /apps/api/bin
 
+# air's scratch directory, recreated on every `make dev`.
+/apps/api/tmp
+
 # sqlc output IS committed (db/sqlc). A deploy target needs nothing but a Go
 # toolchain, so the generated code cannot depend on sqlc being installed there.

@@ -15,8 +15,20 @@ DATABASE_URL ?= $(shell sed -n 's/^DATABASE_URL=//p' ../../.env 2>/dev/null | he
 build: ## Compile the API.
 	go build -trimpath -o $(BIN) ./cmd/api
 
+# The watch rules live in .air.toml, so what triggers a rebuild is reviewable in
+# a diff rather than buried in a recipe here.
 .PHONY: dev
 dev: ## Run with live reload.
+	@command -v air >/dev/null 2>&1 && { air; exit $$?; }; \
+	echo "air is not installed; starting without live reload."; \
+	echo "  go install github.com/air-verse/air@latest   # then make dev reloads"; \
+	echo; \
+	$(MAKE) --no-print-directory run-once
+
+# A single build-and-run, with no watcher. The fallback for `make dev`, and
+# usable on its own when you just want to start the thing.
+.PHONY: run-once
+run-once: ## Build and run once, without a file watcher.
 	go run ./cmd/api
 
 .PHONY: generate
