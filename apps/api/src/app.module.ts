@@ -45,17 +45,18 @@ export const ENTITIES = [
       migrations: [join(__dirname, 'database/migrations/*{.ts,.js}')],
       // Schema is owned by migrations. synchronize must never be true against a shared DB.
       synchronize: false,
-      // Single-container deployment means there is no concurrent-migration race, and
-      // running on boot removes a whole class of "forgot to migrate" deploy bugs.
-      // Set MIGRATIONS_RUN=false to require an explicit `migration:run` instead.
+      // Passenger is pinned to one application process, so there is no
+      // concurrent-migration race, and running on boot removes a whole class of
+      // "forgot to migrate" deploy bugs. Set MIGRATIONS_RUN=false to require an
+      // explicit `migration:run` instead.
       migrationsRun: process.env.MIGRATIONS_RUN !== 'false',
       migrationsTransactionMode: 'each',
       // The public box is small and shared; a large pool buys nothing.
       poolSize: 5,
       extra: {
         max: 5,
-        // DomCloud's PostgreSQL is reached over the container host bridge (10.0.2.2),
-        // which is not exposed to the internet, so TLS is not required there.
+        // cPanel's PostgreSQL listens on localhost, so TLS is not required there.
+        // Only a managed external database (Neon, Supabase, ...) needs it.
         ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
         application_name: 'ghostmplay-api',
       },
@@ -77,7 +78,9 @@ export const ENTITIES = [
             serveStaticOptions: {
               index: ['index.html'],
               // Must call next() on a miss so the request reaches the Nest router;
-              // ServeStaticModule's own renderPath then serves index.html.
+              // ServeStaticModule's own renderPath (which defaults to '*') then
+              // serves index.html, which is what makes vue-router's history-mode
+              // deep links work.
               fallthrough: true,
               setHeaders(res, filePath) {
                 // Bundlers emit content-hashed filenames into a dedicated assets

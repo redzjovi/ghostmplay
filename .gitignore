@@ -1,4 +1,5 @@
 node_modules
+release
 dist
 build
 .output
@@ -14,5 +15,5 @@ build
 .DS_Store
 
 # Local copy of the built web app, used to serve the SPA from the API process
-# during development. In production it is baked into the Docker image instead.
+# during development. In production it is release/public, inside the artifact.
 apps/api/public

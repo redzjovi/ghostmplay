@@ -5,7 +5,7 @@ export class AccountsAndSessions1790658738955 implements MigrationInterface {
 
     public async up(queryRunner: QueryRunner): Promise<void> {
         await queryRunner.query(`DROP INDEX "public"."IDX_8321a0f29001640e8af72236b6"`);
-        await queryRunner.query(`CREATE TABLE "accounts" ("id" SERIAL NOT NULL, "username" citext NOT NULL, "password_hash" text NOT NULL, "role" text NOT NULL DEFAULT 'user', "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_5a7a02c20412299d198e097a8fe" PRIMARY KEY ("id"))`);
+        await queryRunner.query(`CREATE TABLE "accounts" ("id" SERIAL NOT NULL, "username" varchar(255) NOT NULL, "password_hash" text NOT NULL, "role" text NOT NULL DEFAULT 'user', "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_5a7a02c20412299d198e097a8fe" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE UNIQUE INDEX "IDX_477e3187cedfb5a3ac121e899c" ON "accounts" ("username") `);
         await queryRunner.query(`CREATE TABLE "sessions" ("id" BIGSERIAL NOT NULL, "account_id" integer NOT NULL, "token_hash" text NOT NULL, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "expires_at" TIMESTAMP WITH TIME ZONE NOT NULL, CONSTRAINT "PK_3238ef96f18b355b671619111bc" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE INDEX "IDX_da0cf19646ff5c6e3c0284468e" ON "sessions" ("account_id") `);

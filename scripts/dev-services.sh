@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 #
-# Local development data services: PostgreSQL + Valkey, defined in
-# docker-compose.dev.yml. The API itself runs on the host via `pnpm dev`.
+# Local development data service: PostgreSQL, defined in docker-compose.dev.yml.
+# The API itself runs on the host via `pnpm dev`.
 #
-#   up       start both and wait until healthy
-#   down     stop and remove the containers, KEEPING the data volume
-#   nuke     stop and remove the containers AND the data volume
+#   up       start it and wait until healthy
+#   down     stop and remove the container, KEEPING the data volume
+#   nuke     stop and remove the container AND the data volume
 #   reset    drop and recreate the database (migrations replay on next API boot)
 #   status   show container health, then check the schema via DATABASE_URL
-#   logs     tail logs; pass pg or valkey to follow just one
+#   logs     tail the PostgreSQL logs
 #
 # `docker compose down -v` is what destroys data, and `up` reuses the volume, so
 # the lifecycle is expressible with stock compose commands. This script exists
 # only to add the two things compose has no concept of — recreating a database
 # in place, and checking the app's connection string against the compose file.
 #
-# docker-compose.yml is the production path and is deliberately separate: it
-# points at DOM Cloud's shared database over the container host bridge.
+# This file is the local development path only. Production runs on cPanel as a
+# Node process with its own PostgreSQL.
 
 set -euo pipefail
 
@@ -39,16 +39,16 @@ require_docker() {
   docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable. Is Docker running?"
 }
 
-# The healthchecks in docker-compose.dev.yml are what --wait blocks on, so this
-# returns as soon as both services can actually accept traffic, not merely once
-# the containers exist.
+# The healthcheck in docker-compose.dev.yml is what --wait blocks on, so this
+# returns as soon as the service can actually accept traffic, not merely once the
+# container exists.
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
 cmd_up() {
   require_docker
-  head1 "Starting PostgreSQL and Valkey (waiting up to ${WAIT_TIMEOUT}s to be healthy)"
+  head1 "Starting PostgreSQL (waiting up to ${WAIT_TIMEOUT}s to be healthy)"
   compose up -d --wait --wait-timeout "$WAIT_TIMEOUT"
-  printf '  %s✓ both services healthy%s\n' "$C_GREEN" "$C_OFF"
+  printf '  %s✓ healthy%s\n' "$C_GREEN" "$C_OFF"
   printf '\n  Next: %spnpm dev%s  (or %spnpm db:status%s to verify the connection)\n' \
     "$C_GREEN" "$C_OFF" "$C_BLUE" "$C_OFF"
 }
@@ -71,9 +71,8 @@ cmd_logs() {
   require_docker
   case "${1:-}" in
     pg | postgres) compose logs -f postgres ;;
-    valkey | redis) compose logs -f valkey ;;
     '') compose logs -f ;;
-    *) die "logs: expected 'pg' or 'valkey', got '$1'" ;;
+    *) die "logs: expected 'pg', got '$1'" ;;
   esac
 }
 

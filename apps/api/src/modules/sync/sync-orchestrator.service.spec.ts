@@ -75,10 +75,9 @@ function createOrchestrator(opts: { lockGranted?: boolean; throwOnRun?: boolean 
   }
 
   const lock = {
-    acquire: vi.fn(async (_key: string, _ttlSeconds: number) =>
+    acquire: vi.fn(async (_key: string) =>
       opts.lockGranted === false ? null : { release: vi.fn(async () => undefined) }
     ),
-    forceRelease: vi.fn(async (_key: string) => false),
   }
 
   const marketplaceSync = {
@@ -174,7 +173,7 @@ describe('SyncOrchestratorService', () => {
       expect(h.runSpy).toHaveBeenCalledTimes(2)
     })
 
-    it('treats a lock held elsewhere as deduped, and never runs unguarded', async () => {
+    it('treats an already-held lock as deduped, and never runs unguarded', async () => {
       const h2 = createOrchestrator({ lockGranted: false })
       const res = await h2.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
       expect(res.deduped).toBe(true)
@@ -275,7 +274,7 @@ describe('SyncOrchestratorService', () => {
 
     it('takes the same lock a scrape would, so the two cannot overlap', async () => {
       await h.svc.clear('marketplace')
-      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace', expect.any(Number))
+      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace')
     })
 
     it('refuses while that kind is in flight in this process', async () => {
@@ -290,9 +289,9 @@ describe('SyncOrchestratorService', () => {
       await run(opts, { release: async () => undefined })
     })
 
-    it('refuses when the lock is held elsewhere, and does not delete', async () => {
+    it('refuses when the lock is already held, and does not delete', async () => {
       const h2 = createOrchestrator({ lockGranted: false })
-      await expect(h2.svc.clear('history')).rejects.toThrow(/in progress elsewhere/)
+      await expect(h2.svc.clear('history')).rejects.toThrow(/in progress/)
       expect(h2.history.clearAll).not.toHaveBeenCalled()
     })
 
@@ -338,7 +337,7 @@ describe('SyncOrchestratorService', () => {
     // the same key, and dedupe was carried entirely by a table lookup.
     it('keys the lock by kind, so two triggers of the same kind contend', async () => {
       await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
-      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace', expect.any(Number))
+      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace')
     })
 
     it('uses a distinct key per kind so the two do not block each other', async () => {
@@ -347,15 +346,6 @@ describe('SyncOrchestratorService', () => {
       const keys = h.lock.acquire.mock.calls.map((c) => c[0])
       expect(keys).toEqual(['sync:marketplace', 'sync:history'])
       expect(new Set(keys).size).toBe(2)
-    })
-
-    it('gives a backfill a TTL long enough to outlive it', async () => {
-      await h.svc.enqueue({ kind: 'history', mode: 'full' })
-      const ttl = h.lock.acquire.mock.calls[0][1] as number
-      // The TTL is a backstop for a dead process, not a budget: LockService renews
-      // it while the lock is held. It still has to comfortably cover a full history
-      // backfill, so that even a broken renewal leaves the common case finishing.
-      expect(ttl).toBeGreaterThanOrEqual(3600)
     })
   })
 
@@ -658,29 +648,11 @@ describe('SyncOrchestratorService', () => {
       expect(h.stateRepo.update).not.toHaveBeenCalled()
     })
 
-    // The bug this guards. A deploy (or any kill) during a run means `finally`
-    // never executes, so the Redis lock survives its owner. It outlives the row,
-    // which is why clearing `running_since` alone is not enough: every later
-    // trigger then dedupes against a run that no longer exists and sync silently
-    // stops for the rest of the TTL.
-    it('releases the orphaned Redis lock for an interrupted kind', async () => {
-      h.rows.set('marketplace', makeState({ kind: 'marketplace', runningSince: new Date() }))
-      await h.svc.onApplicationBootstrap()
-      expect(h.lock.forceRelease).toHaveBeenCalledWith('sync:marketplace')
-    })
-
-    it('releases both kinds’ locks even when no row was stranded', async () => {
-      // A process killed between taking the lock and committing the row leaves a
-      // lock with no row to match it, so cleanup cannot be driven by the rows.
-      h.rows.set('marketplace', makeState({ kind: 'marketplace' }))
-      h.rows.set('history', makeState({ kind: 'history' }))
-
-      await h.svc.onApplicationBootstrap()
-
-      const keys = h.lock.forceRelease.mock.calls.map((c) => c[0])
-      expect(keys.sort()).toEqual(['sync:history', 'sync:marketplace'])
-    })
-
+    // The bug this guards. A redeploy (or any kill) during a run means `finally`
+    // never executes, so the row keeps claiming a run that is not happening. With
+    // the in-process lock there is nothing else to clean up — the lock died with
+    // the process — so clearing `running_since` is the whole recovery, and without
+    // it the row would report a scrape that will never finish.
     it('lets a new run start after recovery, rather than deduping forever', async () => {
       h.rows.set('marketplace', makeState({ kind: 'marketplace', runningSince: new Date() }))
       await h.svc.onApplicationBootstrap()
@@ -689,7 +661,7 @@ describe('SyncOrchestratorService', () => {
       // joining a run that is not happening.
       const res = await h.svc.enqueue({ kind: 'marketplace', mode: 'latest' })
       expect(res.deduped).toBe(false)
-      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace', expect.any(Number))
+      expect(h.lock.acquire).toHaveBeenCalledWith('sync:marketplace')
     })
   })
 })

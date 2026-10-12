@@ -97,7 +97,7 @@ describe('SyncSchedulerService', () => {
 
   it('still runs history when the marketplace run fails to start', async () => {
     h.orchestrator.enqueue = vi.fn(async ({ kind, mode }: { kind: SyncKind; mode: string }) => {
-      if (kind === 'marketplace') throw new Error('redis down')
+      if (kind === 'marketplace') throw new Error('upstream 500')
       h.order.push('enqueue:history')
       return { deduped: false, kind, mode, runningSince: null }
     }) as never
@@ -107,7 +107,7 @@ describe('SyncSchedulerService', () => {
   })
 
   it('completes without awaiting a kind that never started', async () => {
-    // The lock was held elsewhere, so there is no run to wait on.
+    // The lock was already held, so there is no run to wait on.
     h.orchestrator.enqueue = vi.fn(async ({ kind, mode }: { kind: SyncKind; mode: string }) => {
       h.order.push(`enqueue:${kind}`)
       return { deduped: true, kind, mode, runningSince: null }

@@ -2,14 +2,13 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-# Required by `pnpm deploy`, which builds the runtime image's node_modules.
+# Required by `pnpm deploy`, which assembles the release artifact's node_modules.
 # Workspace packages are hard-linked instead of symlinked so the deployed output
 # is self-contained and does not depend on the monorepo layout.
 # Note: pnpm 11 reads this key in camelCase here, not the kebab-case name.
 injectWorkspacePackages: true
 
 allowBuilds:
-  '@node-rs/argon2': true
   '@nestjs/core': true
   esbuild: true
   vue-demi: true

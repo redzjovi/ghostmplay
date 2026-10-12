@@ -2,8 +2,8 @@
 
 Marketplace tracker for the GhostM / NUMI NFT market. Scrapes the public
 `market-api.numine.io` endpoints, normalises listings and token transfers into
-PostgreSQL, and serves a Vue 3 SPA plus a REST API from a single container on
-[DOM Cloud](https://domcloud.co).
+PostgreSQL, and serves a Vue 3 SPA plus a REST API from a single Node process on
+cPanel.
 
 **Stack:** NestJS 10 · TypeORM · PostgreSQL 17 · Vue 3 · Vite · Pinia · shadcn-vue (Reka UI) · Tailwind 3
 
@@ -11,8 +11,9 @@ PostgreSQL, and serves a Vue 3 SPA plus a REST API from a single container on
 
 ```text
 apps/api/     NestJS: controllers, TypeORM entities, scraper, auth, sync state
-apps/web/     Vue 3 SPA, served as static files by the API container
+apps/web/     Vue 3 SPA, served as static files by the API process
 packages/     shared DTO types
+docs/         cPanel deployment runbook
 ```
 
 `apps/web` keeps the original Electron renderer unchanged. The only thing that
@@ -23,18 +24,18 @@ frontend framework later means reimplementing that one file.
 
 ## Requirements
 
-Node 22, pnpm 11, and a PostgreSQL 17 database.
+Node 22, pnpm 11, and a PostgreSQL 17 database. No Postgres extension is required.
 
 ## Local development
 
-You need a PostgreSQL and a Valkey. Both are defined in
-`docker-compose.dev.yml` and started with `pnpm db:up`, which blocks until each
-one reports healthy. The API itself runs on the host.
+You need a PostgreSQL. It is defined in `docker-compose.dev.yml` and started
+with `pnpm db:up`, which blocks until it reports healthy. The API itself runs on
+the host. Nothing else: the sync lock and the sign-in throttle are per-process.
 
 ```bash
 pnpm install
 cp .env.example .env          # then set DATABASE_URL
-pnpm db:up                    # postgres 17 + valkey 8, waits until healthy
+pnpm db:up                    # postgres 17, waits until healthy
 pnpm dev                      # API on :8080 with watch mode
 pnpm dev:web                  # Vite on :5173, proxying /api to :8080
 ```
@@ -48,9 +49,9 @@ otherwise the marketplace list will look broken when it is just untested.
 ```bash
 pnpm db:status                # container health, then schema + row counts
 pnpm db:reset                 # drop and recreate the database
-pnpm db:down                  # stop and remove containers, KEEP the data
-pnpm db:nuke                  # stop and remove containers AND the data
-pnpm db:logs pg               # tail a service
+pnpm db:down                  # stop and remove the container, KEEP the data
+pnpm db:nuke                  # stop and remove the container AND the data
+pnpm db:logs pg               # tail PostgreSQL
 ```
 
 Data lives in a named volume, so it survives `db:down` / `db:up` and only
@@ -59,10 +60,10 @@ Data lives in a named volume, so it survives `db:down` / `db:up` and only
 `db:reset` recreates the database but does not restart the API, and migrations
 run at boot rather than on connect — so restart `pnpm dev` afterwards.
 
-The local images deliberately match production: `postgres:17-alpine` for
-PostgreSQL 17.4, and `valkey/valkey:8-alpine` for Valkey 8.0. The API container
-in production reaches DOM Cloud's shared services over the host bridge, so
-`docker-compose.yml` is the production path and stays separate from this one.
+`docker-compose.dev.yml` is local-only. Production is a Node process on cPanel
+and shares nothing with it except the database engine; see
+[Deployment](#deployment), or the full runbook in
+[docs/DEPLOY-CPANEL.md](docs/DEPLOY-CPANEL.md).
 
 #### Credentials are declared twice, on purpose
 
@@ -81,24 +82,25 @@ when the volume is *first* initialised, so changing it later needs `db:nuke`.
 
 ### The database address differs per environment
 
-Nothing is hardcoded; it is one variable with three values.
+Nothing is hardcoded; it is one variable with two values.
 
 | Where the API runs | `DATABASE_URL` host |
 |---|---|
-| DOM Cloud container | `10.0.2.2:5432` — the container's route to the host, where the shared PostgreSQL listens |
+| cPanel | `127.0.0.1:5432` — PostgreSQL runs on the same box |
 | Local, API on the host | `127.0.0.1:5432` |
 | Local, API in a container | `host.docker.internal:5432` — `127.0.0.1` inside a container is the container |
 
-DOM Cloud writes the first one for you: `.drone.yml` generates `.env` during
-deployment.
+An external managed database (Neon, Supabase, …) works too: set `DATABASE_SSL=true`,
+since only a database reached over the internet needs TLS.
 
 ### Never point local at the production database
 
-DOM Cloud's PostgreSQL is not reachable from a laptop — the documented "remote
-client" host is an internal server name, and Valkey has no remote access at all.
-More to the point, `app.module.ts` runs migrations on boot. A local `.env`
-pointed at production would apply local migration files to live data, and
-`migration:generate` would diff your dev branch against the production schema.
+cPanel's PostgreSQL *is* reachable from a laptop — it listens on `127.0.0.1` of a
+box you have a shell on, and many hosts expose it on a public port as well. The
+guard against accidents is not the network, it is `app.module.ts`: migrations run
+on boot. A local `.env` pointed at production would apply local migration files
+to live data, and `migration:generate` would diff your dev branch against the
+production schema. Check `DATABASE_URL` before every `pnpm dev`.
 
 ## Checks
 
@@ -106,6 +108,7 @@ pointed at production would apply local migration files to live data, and
 pnpm typecheck    # tsc for the API, vue-tsc for the web app
 pnpm test         # vitest, across both packages
 pnpm build        # shared -> web -> api
+pnpm release      # the checks above, then release/ for cPanel
 ```
 
 To manage migrations by hand:
@@ -117,17 +120,23 @@ pnpm migration:generate src/database/migrations/DescribeYourChange
 
 ## Architecture notes
 
-**One container serves both the SPA and the API.** DOM Cloud's deployment bridge
-rewrites only the `location /` proxy_pass to point at a single container port, so
-splitting static files (served by NGINX) from `/api` (proxied to Docker) would
-require hand-pinning an auto-assigned host port in the NGINX config — config that
-lives outside the repo and breaks on a server move. NestJS serves the built SPA
-via `@nestjs/serve-static` with `/api/(.*)` excluded, so controllers always win.
+**One process serves both the SPA and the API.** Passenger routes every request
+for the domain to the single Node process it spawns, and it assigns that
+process's port itself, so there is no fixed port to proxy to and no reverse proxy
+to configure. NestJS serves the built SPA via `@nestjs/serve-static` with
+`/api/(.*)` excluded, so controllers always win, and the SPA calls `/api`
+same-origin, so there is no CORS and no cross-site cookie to get wrong.
 
-**PostgreSQL and Valkey are DOM Cloud's shared instances, not containers.** They
-are reachable from inside a container at `10.0.2.2`, run on fast disk, and are
-included in the daily backup. Running a database in a container would spend RAM
-on a box that caps a process at 1-2GB.
+**PostgreSQL is cPanel's, not ours.** It runs on the same box, and so does its
+backup. That is the only shared service the app has.
+
+**One process is a correctness requirement, not a scaling choice.** Two in-process
+singletons depend on it. The sync mutex stops a second scraper hitting the same
+public endpoint, and the throttle is a per-IP budget that a second process would
+hand out twice. So the deployment is pinned to a single Passenger instance with
+`PassengerMinInstances` / `PassengerMaxInstances` — which is why those two lines
+in `.htaccess` are load-bearing, why `passenger-status` should show one instance,
+and why [docs/DEPLOY-CPANEL.md](docs/DEPLOY-CPANEL.md) is not optional reading.
 
 **Admin surfaces are separate from browsing, and the destructive one is separated
 from the rest.** The Data page (`/admin/data`) holds the only sync controls, hidden
@@ -251,18 +260,16 @@ transfer, so such an item keeps a null `sold_at` and stays listed. Covering that
 needs a `last_seen_at` column plus a full-inventory walk to spot listings that
 vanished from the upstream list without a sale. Not implemented.
 
-**Transient scraper failures are retried.** Outbound traffic from inside a
-rootless container is the weak point: DNS goes through Docker's embedded resolver
-and the network driver is documented as poor for egress, so a run can fail on
-`EAI_AGAIN` seconds after the container starts. A run retries transient failures
-(DNS, connection reset, 408/425/429/5xx) three times with backoff, and does not
-retry anything that would fail identically on a second try. Re-running is safe
-because both scrapers upsert by a stable key.
+**Transient scraper failures are retried.** Outbound DNS from a freshly spawned
+process on shared hosting can fail with `EAI_AGAIN` seconds after the app starts,
+so a run retries transient failures (DNS, connection reset, 408/425/429/5xx) three
+times with backoff, and does not retry anything that would fail identically on a
+second try. Re-running is safe because both scrapers upsert by a stable key.
 
 **Sessions live in PostgreSQL**, keyed by a random token whose SHA-256 hash is
-stored, in an httpOnly `Secure` `SameSite=Strict` cookie. Passwords are argon2id.
-Failed logins are verified against a dummy hash so a missing account and a wrong
-password take the same time.
+stored, in an httpOnly `Secure` `SameSite=Strict` cookie. There is no password to
+hash and no account to create: a session only ever comes from a verified Google
+ID token.
 
 **Favorites are per-account.** Every lookup is scoped by `account_id`, so another
 user's favorite id is indistinguishable from a missing one.
@@ -276,70 +283,30 @@ controller, and only `favorites.controller.ts` (`RequireAuthGuard`) and
 controllers deliberately do not, so adding one there is a product decision, not a
 clean-up. The client guard in `router/index.ts` fails closed: a route is gated
 unless it carries `meta.public`, so a new page has to opt in to being public.
-
 ## Deployment
 
-There is no CI pipeline and no image registry. The container is built on the
-DOM Cloud server itself, from the cloned source, by the `build` section in
-`docker-compose.yml`.
+The target is **cPanel with Node.js Selector** (CloudLinux + LiteSpeed +
+Passenger). There is no Docker on shared hosting, so the artifact is not an image
+but a directory of files: `pnpm release` assembles `release/` from the checkout
+and Passenger runs one Node process from it.
 
-That makes the Dockerfile's `test` stage load-bearing: `build` depends on it, so
-a failing typecheck or test fails the image, and therefore the deploy. Run
-`pnpm typecheck && pnpm test` locally first and you get the same gate in seconds
-rather than minutes.
-
-See [`.drone.yml`](.drone.yml) for the platform configuration and the plan
-features it requires.
-
-```bash
-docker compose build                        # build the image
-docker compose up -d                        # run it
-docker compose logs -f api
-docker compose down                         # stop
+```
+release/
+  app.js          Passenger's startup file — it looks for this exact name
+  dist/           compiled API
+  public/         built SPA, served by the API from WEB_ROOT
+  node_modules/   production dependencies only, no toolchain, no native binaries
+  tmp/            touch tmp/restart.txt to restart the running app
 ```
 
-**Before the first deploy**, prime the build cache over SSH:
+`pnpm release` runs `typecheck` and `test` before it builds, on purpose. There is
+no CI between a commit and production, so that gate is the only thing standing
+between a broken build and a 502 — it fails in the terminal, with the real error,
+instead of in a browser. The build then runs `shared → web → api`, and `pnpm
+deploy` produces a `node_modules` that has the workspace package injected as real
+files, which is what makes the artifact independent of the monorepo.
 
-```bash
-cd ~/public_html && docker compose build
-```
-
-DOM Cloud's deployment script has a hard 15-minute wall-clock limit
-(`maxExecutionTime = 900000` in their bridge) that covers
-`docker compose up --build`. That cap applies to the script, not to an
-interactive shell, so the first — slowest — build should be primed where it is
-untimed. After that only source layers rebuild. Without this, a cold build on a
-shared 1–2 vCPU box risks exceeding the limit and taking the site down.
-
-Measured build times on a local machine, for reference:
-
-| | |
-|---|---|
-| Cold, empty cache | 1m21s |
-| Source change (re-runs the test gate) | 52s |
-| Nothing changed | ~1s |
-
-Also before the first deploy:
-
-1. Replace the four `CHANGE_ME` values in `.drone.yml`: `GOOGLE_CLIENT_ID`,
-   `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (the Console's authorized redirect
-   URI, exactly) and `GOOGLE_ADMIN_EMAILS` (comma-separated verified addresses).
-   They cannot be set by hand on the box — the pipeline truncates `.env` on every
-   deploy — so anything missing here disables Google and locks out all sign-in.
-2. Confirm the PostgreSQL login from the DOM Cloud Manage tab matches
-   `$USERNAME` / `$PGPASSWD`.
-
-After the first deploy, confirm the bridge assigned a port and wired NGINX:
-
-```bash
-cat ~/public_html/docker-compose.yml     # published port
-docker ps
-docker compose logs api
-```
-
-### Why the build runs on the host network
-
-Rootless Docker on DOM Cloud uses the `pasta` network driver, which is documented
-as fast for incoming connections but slow for outgoing ones. pnpm downloads
-several hundred packages during the build, so `build.network: host` sidesteps it.
-This affects build time only; the running container still uses the normal path.
+**[docs/DEPLOY-CPANEL.md](docs/DEPLOY-CPANEL.md) is the runbook**: database and
+Node.js prerequisites, the build, the Application Manager settings, the
+environment variables, Google sign-in, the one-process pin, redeploying, and what
+to check when a deploy goes wrong.

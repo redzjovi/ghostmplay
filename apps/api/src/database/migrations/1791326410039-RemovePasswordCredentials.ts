@@ -14,8 +14,6 @@ import { MigrationInterface, QueryRunner } from 'typeorm'
  * Hand-written rather than generated — `migration:generate` executes the migration it
  * writes, and it also reads TypeORM-unrepresentable objects such as the partial index
  * `idx_items_active_sold_at` as drift and drops them.
- *
- * The citext extension stays: `account_identities.email` still uses it.
  */
 export class RemovePasswordCredentials1791326410039 implements MigrationInterface {
   name = 'RemovePasswordCredentials1791326410039'
@@ -30,7 +28,7 @@ export class RemovePasswordCredentials1791326410039 implements MigrationInterfac
     // Nullable, unlike the original NOT NULL. Reinstating NOT NULL would fail against
     // any account created by Google sign-in, so a rollback trades that constraint for
     // a rollback that actually completes — see the column comments in account.entity.
-    await queryRunner.query(`ALTER TABLE "accounts" ADD "username" citext`);
+    await queryRunner.query(`ALTER TABLE "accounts" ADD "username" varchar(255)`);
     await queryRunner.query(`ALTER TABLE "accounts" ADD "password_hash" text`);
     await queryRunner.query(`CREATE UNIQUE INDEX "IDX_477e3187cedfb5a3ac121e899c" ON "accounts" ("username") `);
   }

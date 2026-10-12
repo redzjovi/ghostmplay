@@ -2,7 +2,7 @@
   "name": "ghostmplay",
   "version": "0.1.0",
   "private": true,
-  "description": "ghostmplay marketplace — NestJS API + SvelteKit web, deployed to DomCloud via Docker",
+  "description": "ghostmplay marketplace — NestJS API + Vue 3 web, deployed to cPanel with Node.js Selector",
   "packageManager": "pnpm@11.6.0",
   "engines": {
     "node": ">=22"
@@ -19,6 +19,7 @@
     "db:logs": "bash scripts/dev-services.sh logs",
     "build": "pnpm -r --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/web build && pnpm --filter @ghostmplay/api build",
     "build:api": "pnpm --filter @ghostmplay/shared build && pnpm --filter @ghostmplay/api build",
+    "release": "node scripts/release.mjs",
     "start": "pnpm --filter @ghostmplay/api start:prod",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r --if-present lint",

@@ -6,7 +6,6 @@ import cookieParser from 'cookie-parser'
 import { AppModule } from './app.module'
 import { env } from './config/env'
 import { AuthService } from './modules/auth/auth.service'
-import { RateLimiterService } from './common/rate-limiter.service'
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap')
@@ -14,7 +13,7 @@ async function bootstrap(): Promise<void> {
     bufferLogs: env.isProd,
   })
 
-  // DomCloud's NGINX forwards the real client IP via X-Forwarded-For. Without this,
+  // cPanel's LiteSpeed forwards the real client IP via X-Forwarded-For. Without this,
   // req.ip is always the proxy and per-IP rate limiting is useless.
   app.set('trust proxy', env.trustProxy)
   app.enableShutdownHooks()

@@ -13,12 +13,22 @@ import { MigrationInterface, QueryRunner } from 'typeorm'
  * the predicate or the sort direction would leave every list query doing a sort it
  * was previously served by an index, so both statements are dropped and the index
  * is left alone.
+ *
+ * `email` is varchar(255), not citext. It was case-insensitive in the database so
+ * it could be compared, but nothing compares it in SQL: identity is keyed on
+ * Google's `sub` (below), no unique constraint covers email, and the one
+ * case-insensitive comparison in the app — the GOOGLE_ADMIN_EMAILS allowlist —
+ * normalises with `toLowerCase()` in TypeScript before comparing. The length is
+ * the RFC 5321 bound on an address, and is documentation rather than a limit
+ * anything relies on: an over-long value would fail sign-in loudly instead of
+ * being truncated. The Laravel port of this app uses `text` for the same column;
+ * the difference is deliberate, not drift.
  */
 export class GoogleIdentities1790854290511 implements MigrationInterface {
   name = 'GoogleIdentities1790854290511'
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`CREATE TABLE "account_identities" ("id" SERIAL NOT NULL, "account_id" integer NOT NULL, "provider" text NOT NULL, "provider_subject" text NOT NULL, "email" citext, "picture_url" text, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_03a85f9b5b43e86ca9d6f5ec0f7" PRIMARY KEY ("id"))`);
+    await queryRunner.query(`CREATE TABLE "account_identities" ("id" SERIAL NOT NULL, "account_id" integer NOT NULL, "provider" text NOT NULL, "provider_subject" text NOT NULL, "email" varchar(255), "picture_url" text, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_03a85f9b5b43e86ca9d6f5ec0f7" PRIMARY KEY ("id"))`);
     await queryRunner.query(`CREATE INDEX "IDX_df2ef81da2fbf39fac6344a199" ON "account_identities" ("account_id") `);
 
     // One account per external identity. Email is deliberately not part of this key:
@@ -28,7 +38,7 @@ export class GoogleIdentities1790854290511 implements MigrationInterface {
     await queryRunner.query(`CREATE UNIQUE INDEX "UQ_identity_provider_subject" ON "account_identities" ("provider", "provider_subject") `);
 
     // A Google-only account has no username and no local credential. The existing
-    // unique citext index on username survives: Postgres permits many NULLs.
+    // unique index on username survives: Postgres permits many NULLs.
     await queryRunner.query(`ALTER TABLE "accounts" ALTER COLUMN "username" DROP NOT NULL`);
     await queryRunner.query(`ALTER TABLE "accounts" ALTER COLUMN "password_hash" DROP NOT NULL`);
 

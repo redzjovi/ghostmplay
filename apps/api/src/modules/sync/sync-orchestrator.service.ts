@@ -9,15 +9,6 @@ import { MarketplaceService } from '../marketplace/marketplace.service'
 import { HistoryService } from '../marketplace/history.service'
 import { describeError, isTransientError } from './transient'
 
-/**
- * The TTL on a lock is a backstop for a process that dies, not a budget for a
- * run's duration. LockService renews it while the lock is held, so a backfill may
- * take as long as the upstream makes it take without a second scrape starting
- * underneath it. It is sized to comfortably outlive a full history backfill, so
- * that even if renewal were ever broken the common case still finishes in time.
- */
-const LOCK_TTL_SECONDS = 7200
-
 /** Transient-failure budget. Kept small: a real outage should fail visibly, not hang. */
 const MAX_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 2000
@@ -65,17 +56,16 @@ export interface SyncStatusSnapshot {
  * Runs scraper work in the background, one run per kind at a time.
  *
  * Why this exists: sync used to be a blocking IPC call that paginated the upstream
- * API to exhaustion while the caller waited. In a shared web container that is a
- * liability — it holds a request open, it is unbounded, and a deploy
- * (`compose down`) kills it mid-flight. Now a request acquires a lock and returns,
- * and the UI polls one row per kind for progress.
+ * API to exhaustion while the caller waited. On a shared box that is a liability —
+ * it holds a request open, it is unbounded, and a redeploy kills it mid-flight.
+ * Now a request acquires a lock and returns, and the UI polls one row per kind
+ * for progress.
  *
  * Dedupe is the lock, not a table lookup. The lock key is `sync:<kind>`, so two
- * concurrent triggers of the same kind contend for the same key whether they
- * arrive at this process or at another one; the in-process `inflight` set then
- * covers the window before the lock is visible, and the case where a long run
- * outlives its TTL. Keying on a job id, as an earlier version did, meant the lock
- * never actually contended and the table query was doing all the work.
+ * concurrent triggers of the same kind contend for the same key; the in-process
+ * `inflight` set then covers the window before the lock is visible. Keying on a
+ * job id, as an earlier version did, meant the lock never actually contended and
+ * the table query was doing all the work.
  */
 @Injectable()
 export class SyncOrchestratorService implements OnApplicationBootstrap {
@@ -103,44 +93,35 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
    * Recovers from a process that died mid-run.
    *
    * A run left with `running_since` set cannot still be running: the process that
-   * owned it has either died or been redeployed. Its Redis lock is orphaned in the
-   * same way, and is the more dangerous of the two — it outlives the row, so
-   * without releasing it every later trigger dedupes against a run that no longer
-   * exists and sync silently stops until the TTL runs out.
+   * owned it has either died or been redeployed. Nothing else is stranded — the
+   * in-process lock died with it — so clearing the row is the whole recovery, and
+   * without it the row would keep reporting a run that is not happening.
    */
   async onApplicationBootstrap(): Promise<void> {
     const stranded = await this.stateRepo.find({
       where: SYNC_KINDS.map((kind) => ({ kind, runningSince: Not(IsNull()) })),
     })
 
-    if (stranded.length > 0) {
-      this.logger.warn(`Marked ${stranded.length} interrupted sync(s) from a previous run`)
-      await this.stateRepo.update(
-        { runningSince: Not(IsNull()) },
-        {
-          runningSince: null,
-          lastStatus: 'interrupted',
-          lastFinishedAt: new Date(),
-          lastError: 'Interrupted by restart',
-        } as QueryDeepPartialEntity<SyncStateEntity>
-      )
-    }
+    if (stranded.length === 0) return
 
-    // Released for every kind, not just the stranded ones: a process killed between
-    // taking the lock and committing the row would leave the lock with no row to
-    // match it.
-    for (const kind of SYNC_KINDS) {
-      await this.lock.forceRelease(`sync:${kind}`)
-    }
+    this.logger.warn(`Marked ${stranded.length} interrupted sync(s) from a previous run`)
+    await this.stateRepo.update(
+      { runningSince: Not(IsNull()) },
+      {
+        runningSince: null,
+        lastStatus: 'interrupted',
+        lastFinishedAt: new Date(),
+        lastError: 'Interrupted by restart',
+      } as QueryDeepPartialEntity<SyncStateEntity>
+    )
   }
 
   /**
    * Claims the lock for this kind and starts the scrape in the background.
    *
-   * Returns immediately. If a run of the same kind is already going — in this
-   * process or another — that run is joined rather than duplicated, because a
-   * double-clicked "Sync full" must not launch a second unbounded scrape of the
-   * same API.
+   * Returns immediately. If a run of the same kind is already going, that run is
+   * joined rather than duplicated, because a double-clicked "Sync full" must not
+   * launch a second unbounded scrape of the same API.
    */
   async enqueue(opts: EnqueueOptions): Promise<EnqueueResult> {
     const { kind, mode } = opts
@@ -150,9 +131,9 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
       return { deduped: true, kind, mode, runningSince: await this.runningSinceOf(kind) }
     }
 
-    const lock = await this.lock.acquire(`sync:${kind}`, LOCK_TTL_SECONDS)
+    const lock = await this.lock.acquire(`sync:${kind}`)
     if (!lock) {
-      this.logger.log(`Lock for ${kind} held elsewhere; joining that run`)
+      this.logger.log(`Lock for ${kind} already held; joining that run`)
       return { deduped: true, kind, mode, runningSince: await this.runningSinceOf(kind) }
     }
 
@@ -215,19 +196,20 @@ export class SyncOrchestratorService implements OnApplicationBootstrap {
    * Deletes everything one kind of scraper owns. Irreversible, admin-only, and
    * never performed while that kind is being scraped.
    *
-   * The lock does double duty as the "is anything running?" test. Checking
-   * `inflight` covers this process; failing to acquire `sync:<kind>` covers the
-   * rest, including another process holding a lease. Either way the answer is a
-   * conflict rather than a delete racing an in-flight insert.
+   * Two tests for "is anything running?", covering windows the other does not.
+   * `inflight` is the run's own registration and is set for its whole life. The
+   * lock additionally covers the microtask between taking it and registering the
+   * run, which is the only moment `inflight` lies. Failing either is a conflict
+   * rather than a delete racing an in-flight insert.
    */
   async clear(kind: SyncKind): Promise<ClearResult> {
     if (this.inflight.has(kind)) {
       throw new ConflictException(`A ${kind} sync is in progress`)
     }
 
-    const lock = await this.lock.acquire(`sync:${kind}`, LOCK_TTL_SECONDS)
+    const lock = await this.lock.acquire(`sync:${kind}`)
     if (!lock) {
-      throw new ConflictException(`A ${kind} sync is in progress elsewhere`)
+      throw new ConflictException(`A ${kind} sync is in progress`)
     }
 
     try {

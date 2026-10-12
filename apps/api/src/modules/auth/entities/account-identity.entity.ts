@@ -35,9 +35,14 @@ export class AccountIdentityEntity {
   /** The provider's own stable identifier for the user — Google's `sub`. */
   @Column({ type: 'text', name: 'provider_subject' }) providerSubject!: string
 
-  @Column({ type: 'citext', nullable: true }) email!: string | null
+  /**
+   * Informational only; never used to look an account up. `varchar(255)` rather
+   * than citext: the length is the RFC 5321 bound on an address, and nothing
+   * compares this column in SQL — the one case-insensitive comparison in the app,
+   * the admin allowlist, lowercases in `google-auth.service.ts` before comparing.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true }) email!: string | null
 
-  /** Informational only; never used to look an account up. */
   @Column({ type: 'text', nullable: true, name: 'picture_url' }) pictureUrl!: string | null
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' }) createdAt!: Date

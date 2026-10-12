@@ -23,9 +23,14 @@ function findUp(name: string, startDir: string): string | undefined {
 
 const cwd = process.cwd()
 
-// dotenv does not override variables already present in the environment, so a
-// real env var always wins over the file.
-loadEnv({ path: findUp('.env', cwd) })
+/**
+ * dotenv does not override variables already present in the environment, so a
+ * real env var always wins over the file. On cPanel the Application Manager's
+ * Environment Variables table is such a variable, which is why a `.env` file is
+ * optional there. The module-relative fallback covers hosts that run the app from
+ * a working directory that is not the application root.
+ */
+loadEnv({ path: findUp('.env', cwd) ?? join(__dirname, '..', '..', '.env') })
 
 function required(name: string, value: string | undefined): string {
   const trimmed = value?.trim()
@@ -43,16 +48,21 @@ function optionalInt(name: string, value: string | undefined, fallback: number):
 const isProd = process.env.NODE_ENV === 'production'
 
 /**
- * Where the built web app lives, if it has been built. In production this is
- * baked into the image at /app/public. In development it is usually served by
- * Vite instead, but these candidates let the API serve it if you prefer one
- * origin: apps/api/public (a copy), or apps/web/dist straight from the workspace.
+ * Where the built web app lives, if it has been built. In production this is the
+ * `public/` directory of the release artifact. In development it is usually served by
+ * Vite instead, but these candidates let the API serve it if you prefer one origin:
+ * apps/api/public (a copy), or apps/web/dist straight from the workspace.
+ *
+ * The module-relative candidate is the one that matters in production: cPanel's
+ * Passenger controls the working directory, so resolving against `cwd` alone is a
+ * guess. Relative to the compiled file it is `apps/api/public` in the workspace and
+ * `release/public` in the artifact — correct in both, with nothing to configure.
  */
 const webRootCandidates = [
   process.env.WEB_ROOT,
   resolve(cwd, 'public'),
+  join(__dirname, '..', '..', 'public'),
   findUp('dist', resolve(cwd, 'apps/web')),
-  '/app/public',
 ].filter((p): p is string => typeof p === 'string' && p.length > 0)
 
 /**
@@ -104,8 +114,8 @@ export const env = {
   databaseUrl: required('DATABASE_URL', process.env.DATABASE_URL),
 
   /**
-   * DomCloud sits behind NGINX, which forwards the real client IP in X-Forwarded-For.
-   * Without this, req.ip is the proxy and rate limiting is useless.
+   * cPanel puts LiteSpeed in front of the app, which forwards the real client IP in
+   * X-Forwarded-For. Without this, req.ip is the proxy and rate limiting is useless.
    */
   trustProxy: (process.env.TRUST_PROXY ?? '1') as 1 | 0 | number | string | boolean,
   /** Comma-separated list of allowed CORS origins. Empty/absent = same-origin only (recommended). */
@@ -131,9 +141,6 @@ export const env = {
     /** All three are needed before the endpoints will do anything. */
     enabled: Boolean(googleClientId && googleClientSecret && googleRedirectUri && googleStateSecret),
   },
-
-  /** Valkey/Redis for rate limiting. Absent means rate limiting is disabled. */
-  redisUrl: process.env.REDIS_URL,
 
   logApi: process.env.LOG_API === '1',
   logQuery: process.env.LOG_QUERY === '1' || process.env.TYPEORM_LOGGING === 'true',
