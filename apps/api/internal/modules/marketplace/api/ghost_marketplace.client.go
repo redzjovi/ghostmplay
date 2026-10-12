@@ -27,6 +27,19 @@ const BaseURL = "https://market-api.numine.io"
 // DefaultServiceName is the only game this app tracks.
 const DefaultServiceName = "GhostMGlobal"
 
+// The upstream's routes, relative to /api/users.
+//
+// The middle segment is part of the route and omitting it does not reliably
+// fail: /api/users/token-transfers answers 200 from a *different* endpoint whose
+// rows use different field names entirely. So the paths are named here, spelled
+// out in full, and asserted in the tests -- a route that quietly resolves is worse
+// than one that 404s.
+const (
+	PathSearchListings = "market/search-redis"
+	PathItemDetail     = "nft/item-detail"
+	PathTokenTransfers = "market/token-transfers"
+)
+
 // RequestTimeout bounds a single upstream call.
 //
 // Long enough for a slow page of results, short enough that a hung connection
@@ -39,21 +52,28 @@ type Client struct {
 	http    *http.Client
 	log     *slog.Logger
 	baseURL string
+	// profiles supplies the browser headers sent with each request. A field so
+	// a test can pin it; nil means "pick at random per request".
+	profiles *browserProfiles
 }
 
 // NewClient builds a client. The log level is taken from the logger's enabled
 // state, so setting the level to Info is all it takes to get upstream logging.
 func NewClient(log *slog.Logger) *Client {
 	return &Client{
-		http: &http.Client{Timeout: RequestTimeout},
-		log:  log,
-		// Overridable so a test can point the whole client at a local server.
-		baseURL: BaseURL,
+		http:     &http.Client{Timeout: RequestTimeout},
+		log:      log,
+		baseURL:  BaseURL,
+		profiles: defaultProfiles(),
 	}
 }
 
 // SetBaseURL overrides the upstream address. For tests.
 func (c *Client) SetBaseURL(u string) { c.baseURL = strings.TrimRight(u, "/") }
+
+// SetProfiles pins the browser-header profiles instead of picking at random.
+// For tests, which need a request to look identical every time.
+func (c *Client) SetProfiles(p *browserProfiles) { c.profiles = p }
 
 // HTTPError carries the upstream status code.
 //
@@ -83,25 +103,6 @@ func StatusOf(err error) int {
 		return httpErr.Status
 	}
 	return 0
-}
-
-// The upstream is a browser-facing API behind the same site's CORS rules, and it
-// does answer to a plain server-side request. These headers are sent anyway
-// because they cost nothing and they keep the shape of the request identical to
-// what a browser sends -- which is the difference between "the upstream changed
-// something and we did not notice" and a working scrape.
-var browserHeaders = map[string]string{
-	"Accept":             "application/json",
-	"Accept-Language":    "en,id;q=0.9",
-	"Origin":             "https://market.numine.io",
-	"Referer":            "https://market.numine.io/",
-	"Sec-Fetch-Dest":     "empty",
-	"Sec-Fetch-Mode":     "cors",
-	"Sec-Fetch-Site":     "same-site",
-	"User-Agent":         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-	"sec-ch-ua":          `"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"`,
-	"sec-ch-ua-mobile":   "?0",
-	"sec-ch-ua-platform": `"Linux"`,
 }
 
 // SearchRedisItem is one listing from the search endpoint.
@@ -164,7 +165,7 @@ func (c *Client) SearchRedis(ctx context.Context, opts SearchRedisOptions) (*Sea
 	}
 
 	var out SearchRedisResponse
-	if err := c.get(ctx, "search-redis", q, &out); err != nil {
+	if err := c.get(ctx, PathSearchListings, q, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -246,7 +247,7 @@ func (c *Client) DetailStrict(ctx context.Context, tokenID int32, serviceName st
 	form.Set("serviceName", serviceName)
 
 	var out ItemDetail
-	if err := c.post(ctx, "item-detail", form, &out); err != nil {
+	if err := c.post(ctx, PathItemDetail, form, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -291,7 +292,7 @@ func (c *Client) TokenTransfers(ctx context.Context, opts TokenTransfersOptions)
 	q.Set("offset", strconv.Itoa(opts.Offset))
 
 	var out TokenTransfersResponse
-	if err := c.get(ctx, "token-transfers", q, &out); err != nil {
+	if err := c.get(ctx, PathTokenTransfers, q, &out); err != nil {
 		return nil, err
 	}
 	if out.Lists == nil {
@@ -320,7 +321,9 @@ func (c *Client) do(ctx context.Context, method, op, target string, form url.Val
 	if err != nil {
 		return fmt.Errorf("build %s %s: %w", method, target, err)
 	}
-	for k, v := range browserHeaders {
+	// Drawn per request, but as a coherent whole -- see browser_headers.go for
+	// why the fields must not be randomised independently of each other.
+	for k, v := range c.profiles.pick().headers() {
 		req.Header.Set(k, v)
 	}
 	if form != nil {
@@ -351,10 +354,45 @@ func (c *Client) do(ctx context.Context, method, op, target string, form url.Val
 		}
 	}
 
-	if err := json.Unmarshal(raw, out); err != nil {
+	if err := decodeEnvelope(raw, out); err != nil {
 		return fmt.Errorf("%s %s: decode: %w", method, target, err)
 	}
 	return nil
+}
+
+// upstreamEnvelope is the shape every endpoint wraps its payload in:
+//
+//	{"message":"성공","data":{ ... }}
+//
+// Decoding the body directly into the response struct leaves every field at its
+// zero value, silently: a search returns "0 listings", a transfer page returns
+// empty rows. Nothing errors. That failure mode is why this is here.
+type upstreamEnvelope struct {
+	Data    json.RawMessage `json:"data"`
+	Message string          `json:"message"`
+}
+
+// decodeEnvelope unwraps `data` and decodes it into out.
+//
+// Falls back to decoding the whole body when there is no usable `data`. The
+// previous implementation did `data.data ?? data`, and in JavaScript `??`
+// treats `null` as absent -- so a literal `"data": null` fell back too. A plain
+// nil check on a json.RawMessage would not, because `null` unmarshals to a
+// four-byte slice rather than to nil. Both spellings are handled here.
+func decodeEnvelope(raw []byte, out any) error {
+	var env upstreamEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		// Not an object with a `data` key: the caller sent a bare payload, or
+		// something that is not JSON at all. Let the direct decode produce the
+		// useful error.
+		return json.Unmarshal(raw, out)
+	}
+
+	body := env.Data
+	if len(body) == 0 || string(body) == "null" {
+		body = raw
+	}
+	return json.Unmarshal(body, out)
 }
 
 func truncate(s string, max int) string {

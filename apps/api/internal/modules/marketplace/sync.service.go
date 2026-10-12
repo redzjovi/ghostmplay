@@ -90,8 +90,26 @@ func (s *SyncService) Refresh(ctx context.Context, itemName string, mode SyncMod
 			return SyncResult{}, fmt.Errorf("search redis page %d: %w", page, err)
 		}
 
+		// The upstream's own count is logged on every page. It is the cheapest
+		// possible check that the response was decoded rather than discarded:
+		// when the {message,data} envelope was not unwrapped, count and items
+		// both came back as 0 and the run reported "synced 0" as a success. Two
+		// numbers side by side in the log make that visible in one line.
+		s.log.Debug("search page",
+			"page", page, "mode", mode, "count", res.Count, "items", len(res.Items))
+
 		items := res.Items
 		if len(items) == 0 {
+			// An empty first page is a shape the upstream has never had, and it
+			// is the exact signature of a response that decoded to nothing.
+			// Treating it as a clean finish is how a broken decode turns into a
+			// silent outage; treating it as an error turns it into a failed run
+			// the sync panel shows.
+			if page == 0 && res.Count > 0 {
+				return SyncResult{}, fmt.Errorf(
+					"search listings reported %v listings but decoded none of them; "+
+						"the response shape changed", res.Count)
+			}
 			s.log.Info("scrape done", "reason", "no items at page", "page", page)
 			break
 		}
