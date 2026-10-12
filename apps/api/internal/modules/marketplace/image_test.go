@@ -81,8 +81,11 @@ func TestParseTraitPairs(t *testing.T) {
 		"Grade Effect=Legacy",
 		"Equipment Type=Armor",
 		"Name=A=B=C",
+		// No '=' at all: the key is still recorded, with an empty value, so the
+		// lookup yields "" rather than substituting the default.
 		"NoEquals",
-		"=orphanKey",
+		// An empty key has nothing to file it under, so it is dropped.
+		"=orphanValue",
 		"  Spaced  =  value  ",
 	})
 
@@ -93,7 +96,8 @@ func TestParseTraitPairs(t *testing.T) {
 		// Split on the FIRST '=' only: a value containing '=' is kept whole.
 		"Name": "A=B=C",
 		// Key and value are both trimmed, even though the pair was not.
-		"Spaced": "value",
+		"Spaced":   "value",
+		"NoEquals": "",
 	}
 
 	if len(got) != len(want) {

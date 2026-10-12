@@ -195,11 +195,18 @@ func (s *AuthService) Complete(ctx context.Context, code, state, oauthError stri
 // than an arbitrary pick.
 func (s *AuthService) EmailFor(ctx context.Context, accountID int32) (*string, error) {
 	email, err := s.queries.GetIdentityEmailByAccountID(ctx, accountID)
-	if errors.Is(err, sql.ErrNoRows) || !email.Valid || email.String == "" {
-		return nil, nil
-	}
+	// The error is checked FIRST. The reverse order -- testing the zero value
+	// before the error -- returns "no address" for every failure, so a database
+	// that is down answers /api/auth/me with a 200 and a null email instead of
+	// a 500, and the failure is only visible as an avatar that never appears.
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read identity email: %w", err)
+	}
+	if !email.Valid || email.String == "" {
+		return nil, nil
 	}
 	v := email.String
 	return &v, nil

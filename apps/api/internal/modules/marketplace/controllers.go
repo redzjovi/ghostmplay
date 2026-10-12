@@ -239,46 +239,21 @@ func (h *FavoritesController) Delete(c *fiber.Ctx) error {
 
 // liveItemDetail renders the upstream payload for the preview dialog.
 //
-// Passed through as a map rather than projected onto a struct: the dialog renders
-// whatever attributes the upstream sent, and a struct standing in for it would
-// drop any field it did not know about when this was written.
+// The whole object, not a projection. The dialog renders whatever the upstream
+// sent, and the previous implementation returned the complete response; trimming
+// it to the handful of fields this client happens to read today is a silent
+// narrowing of a contract that packages/shared/src/types.ts still declares at
+// full width. It also drops description, external_url, mintTime, state and the
+// rest, none of which any code depends on today and all of which are one
+// upstream change away from mattering.
+//
+// The type carries Raw so the unknown keys survive; see api.ItemDetail.
 func liveItemDetail(detail *api.ItemDetail) models.LiveItemDetail {
 	if detail == nil {
 		return nil
 	}
-
-	out := models.LiveItemDetail{}
-	if detail.TokenID != 0 {
-		out["tokenId"] = detail.TokenID
+	if len(detail.Raw) == 0 {
+		return nil
 	}
-	if detail.Owner != "" {
-		out["owner"] = detail.Owner
-	}
-	if detail.OwnerName != "" {
-		out["ownerName"] = detail.OwnerName
-	}
-	out["price"] = detail.Price
-	if detail.IPFS != "" {
-		out["ipfs"] = detail.IPFS
-	}
-
-	if detail.Details.Name != "" || detail.Details.Image != "" || len(detail.Details.Attributes) > 0 {
-		details := map[string]any{}
-		if detail.Details.Name != "" {
-			details["name"] = detail.Details.Name
-		}
-		if detail.Details.Image != "" {
-			details["image"] = detail.Details.Image
-		}
-		if len(detail.Details.Attributes) > 0 {
-			details["attributes"] = detail.Details.Attributes
-		}
-		out["details"] = details
-	}
-
-	if len(detail.ViewData.Datas) > 0 {
-		out["viewData"] = map[string]any{"datas": detail.ViewData.Datas}
-	}
-
-	return out
+	return models.LiveItemDetail(detail.Raw)
 }

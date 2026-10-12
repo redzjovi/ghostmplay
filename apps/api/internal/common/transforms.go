@@ -57,8 +57,17 @@ func SplitCSV(value string) []string {
 // ToOptionalInt keeps an empty string as "not supplied" so `?level=` is ignored
 // rather than becoming 0. Without this, an empty filter box silently filters
 // the list to level-zero items.
+//
+// The value is trimmed before parsing. The original reached for JavaScript's
+// Number(), which ignores surrounding whitespace, so " 12 " was a page number
+// there and is not one here otherwise -- and a parameter the client sends that
+// silently becomes a default is worse than one that is rejected.
 func ToOptionalInt(value string, present bool) (*int64, bool) {
-	if !present || value == "" {
+	if !present {
+		return nil, false
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil, false
 	}
 	n, err := strconv.ParseFloat(value, 64)
@@ -72,7 +81,11 @@ func ToOptionalInt(value string, present bool) (*int64, bool) {
 // ToOptionalFloat keeps an empty string as "not supplied", for the same reason
 // as ToOptionalInt.
 func ToOptionalFloat(value string, present bool) (*float64, bool) {
-	if !present || value == "" {
+	if !present {
+		return nil, false
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil, false
 	}
 	n, err := strconv.ParseFloat(value, 64)

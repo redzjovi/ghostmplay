@@ -95,7 +95,7 @@ func (s *SyncService) Refresh(ctx context.Context, itemName string, mode SyncMod
 		// when the {message,data} envelope was not unwrapped, count and items
 		// both came back as 0 and the run reported "synced 0" as a success. Two
 		// numbers side by side in the log make that visible in one line.
-		s.log.Debug("search page",
+		s.log.Info("search page",
 			"page", page, "mode", mode, "count", res.Count, "items", len(res.Items))
 
 		items := res.Items
@@ -137,7 +137,15 @@ func (s *SyncService) Refresh(ctx context.Context, itemName string, mode SyncMod
 				toFetch = append(toFetch, it)
 				continue
 			}
-			if knownCreatedAt[id] != itemCreatedAt(it) {
+			// The lookup, not the comparison. A Go map miss reads as 0, and a
+			// listing whose upstream created_at is itself 0 would then compare
+			// equal to its own absence -- so a brand-new listing would never be
+			// detail-fetched, and would sit in the database forever with only the
+			// fallback attributes from the search result. The write loop a dozen
+			// lines below gets this right by testing presence; both paths have to
+			// agree.
+			stored, known := knownCreatedAt[id]
+			if !known || stored != itemCreatedAt(it) {
 				toFetch = append(toFetch, it)
 			}
 		}
@@ -238,14 +246,18 @@ func mapItem(it api.SearchRedisItem, ipfsBase string, detail *api.ItemDetail) Up
 	// of what the token actually is, where trait_pairs is a flattened summary
 	// that has been wrong before.
 	detailAttrs := map[string]string{}
-	if detail != nil {
-		for _, a := range detail.Details.Attributes {
-			key := strings.TrimSpace(a.TraitType)
-			if key == "" {
-				continue
-			}
-			detailAttrs[key] = trimAttrValue(a.Value)
+	for _, a := range detail.Attributes() {
+		// trait_type is canonical, but some tokens send `type` instead; the
+		// client reads `trait_type ?? type`, so both are honoured here rather
+		// than only the one that happens to be common.
+		key := strings.TrimSpace(a.Type)
+		if key == "" {
+			key = strings.TrimSpace(a.AltType)
 		}
+		if key == "" {
+			continue
+		}
+		detailAttrs[key] = trimAttrValue(a.Value)
 	}
 
 	attr := func(key, fallback string) string {
@@ -335,33 +347,29 @@ func mapItem(it api.SearchRedisItem, ipfsBase string, detail *api.ItemDetail) Up
 // detailPayload extracts the three stored blobs, or nil when no detail was
 // fetched.
 //
-// An empty blob is stored as JSON null rather than skipped: the column is
-// nullable and null is what "the upstream did not send this" means.
+// The blobs are handed over as the bytes the upstream sent. They are NOT decoded
+// and re-encoded: that round trip would drop every key the Go structs do not
+// name and invent keys the upstream omitted, and these columns exist to be a
+// faithful mirror. An absent blob becomes JSON null, which is what the nullable
+// column means and what "the upstream did not send this" should look like.
 func detailPayload(detail *api.ItemDetail) *DetailPayload {
 	if detail == nil {
 		return nil
 	}
-	payload := &DetailPayload{
-		Attributes: json.RawMessage("null"),
-		Datas:      json.RawMessage("null"),
-		Infos:      json.RawMessage("null"),
+	return &DetailPayload{
+		Attributes: rawOrNull(detail.Details.Attributes),
+		Datas:      rawOrNull(detail.ViewData.Datas),
+		Infos:      rawOrNull(detail.ViewData.Infos),
 	}
-	if len(detail.Details.Attributes) > 0 {
-		if b, err := json.Marshal(detail.Details.Attributes); err == nil {
-			payload.Attributes = b
-		}
+}
+
+// rawOrNull normalises an absent or JSON-null blob to an explicit null, leaving
+// anything else byte-for-byte.
+func rawOrNull(v json.RawMessage) json.RawMessage {
+	if len(v) == 0 || string(v) == "null" {
+		return json.RawMessage("null")
 	}
-	if len(detail.ViewData.Datas) > 0 {
-		if b, err := json.Marshal(detail.ViewData.Datas); err == nil {
-			payload.Datas = b
-		}
-	}
-	if len(detail.ViewData.Infos) > 0 {
-		if b, err := json.Marshal(detail.ViewData.Infos); err == nil {
-			payload.Infos = b
-		}
-	}
-	return payload
+	return v
 }
 
 // trimAttrValue renders an attribute value as a string.

@@ -178,6 +178,13 @@ func (c *Client) SearchRedis(ctx context.Context, opts SearchRedisOptions) (*Sea
 // search result is the fallback. Both spellings appear in the wild depending on
 // how the token was minted.
 type ItemDetail struct {
+	// Raw is the decoded object, keys and all.
+	//
+	// /live proxies the upstream response to the preview dialog verbatim, so the
+	// unknown keys have to survive. Typed fields alongside it cover what the
+	// sync actually reads; this covers everything else.
+	Raw map[string]any `json:"-"`
+
 	TokenID     int32   `json:"tokenId"`
 	IndexID     string  `json:"indexId"`
 	ServiceName string  `json:"serviceName"`
@@ -187,26 +194,31 @@ type ItemDetail struct {
 	ViewCount   float64 `json:"viewCount"`
 	Price       float64 `json:"price"`
 
+	// The three stored blobs are held as raw JSON, not as typed slices.
+	//
+	// This is not laziness, it is the only way to store them faithfully. These
+	// columns are a verbatim mirror of what the upstream sent and the detail page
+	// renders whatever arrives. Typed fields would DROP every key the struct does
+	// not name -- and the client reads `x.trait_type ?? x.type`, so the `type`
+	// alias some tokens send would be deleted here and never recovered -- while
+	// also materialising keys the upstream omitted, as `{"trait_type":"","value":null}`
+	// rather than leaving them absent.
+	//
+	// So they are passed through untouched, and anything that needs to read one
+	// decodes it on the spot into whatever shape it wants.
 	Details struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		// Image is a bare CID on a real gateway, not a URL.
-		Image       string `json:"image"`
-		ExternalURL string `json:"external_url"`
-		Attributes  []struct {
-			TraitType string `json:"trait_type"`
-			Value     any    `json:"value"`
-		} `json:"attributes"`
+		Image       string          `json:"image"`
+		ExternalURL string          `json:"external_url"`
+		Attributes  json.RawMessage `json:"attributes"`
 	} `json:"details"`
 
 	ViewData struct {
-		Datas []struct {
-			Title  string `json:"title"`
-			Values []any  `json:"values"`
-			Class  string `json:"class"`
-		} `json:"datas"`
-		Infos    []map[string]any `json:"infos"`
-		ViewType string           `json:"viewType"`
+		Datas    json.RawMessage `json:"datas"`
+		Infos    json.RawMessage `json:"infos"`
+		ViewType string          `json:"viewType"`
 	} `json:"viewData"`
 
 	// MintTime is the upstream's own format, e.g. "2026-09-20 00:06:31 +0900 KST".
@@ -330,6 +342,8 @@ func (c *Client) do(ctx context.Context, method, op, target string, form url.Val
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
+	c.log.Debug("upstream request", "op", op, "url", target)
+
 	res, err := c.http.Do(req)
 	if err != nil {
 		// Transport failures are deliberately not wrapped in HTTPError: no
@@ -353,6 +367,8 @@ func (c *Client) do(ctx context.Context, method, op, target string, form url.Val
 			Op:     op,
 		}
 	}
+
+	c.log.Debug("upstream response", "op", op, "status", res.StatusCode, "bytes", len(raw))
 
 	if err := decodeEnvelope(raw, out); err != nil {
 		return fmt.Errorf("%s %s: decode: %w", method, target, err)
@@ -400,4 +416,51 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// Attribute is one entry from the stored attributes blob.
+//
+// Declared here, next to the raw field, rather than inline in the consumer, so
+// that the one place that knows the blob is untyped is also the place that
+// knows what it looks like.
+type Attribute struct {
+	// Type is the canonical key.
+	Type string `json:"trait_type"`
+	// AltType is the alias some tokens use instead of trait_type. Kept because
+	// the client reads `trait_type ?? type`; anything that normalises the key
+	// has to preserve the alternative rather than collapse it.
+	AltType string `json:"type"`
+	Value   any    `json:"value"`
+}
+
+// Attributes decodes the stored attribute blob.
+//
+// Returns nil on absent or undecodable input, which is what the callers treat
+// as "fall back to the search result's trait_pairs".
+func (d *ItemDetail) Attributes() []Attribute {
+	if d == nil || len(d.Details.Attributes) == 0 {
+		return nil
+	}
+	var out []Attribute
+	if err := json.Unmarshal(d.Details.Attributes, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// Datas decodes the stored datas blob, kept raw because only the detail page
+// reads it.
+func (d *ItemDetail) Datas() json.RawMessage {
+	if d == nil {
+		return nil
+	}
+	return d.ViewData.Datas
+}
+
+// Infos decodes the stored infos blob, likewise.
+func (d *ItemDetail) Infos() json.RawMessage {
+	if d == nil {
+		return nil
+	}
+	return d.ViewData.Infos
 }

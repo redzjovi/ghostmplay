@@ -13,6 +13,7 @@
 package dto
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -81,13 +82,28 @@ func (q MarketplaceListQuery) Offset() int { return (q.Page - 1) * q.Limit }
 // different in that silently falling back to the default hides a UI bug behind
 // a list that looks plausible.
 func ParseMarketplaceListQuery(c *fiber.Ctx) (MarketplaceListQuery, error) {
-	args := c.Context().QueryArgs()
+	return parseMarketplaceQuery(c.Context().QueryArgs())
+}
+
+// parseMarketplaceQuery is the testable core, taking the parsed query string
+// rather than a request. Every rule below is about how a parameter arrives, so
+// being able to hand it one directly is most of what the tests need.
+func parseMarketplaceQuery(args *fasthttp.Args) (MarketplaceListQuery, error) {
 	q := MarketplaceListQuery{}
 
 	if page, ok := common.ToOptionalInt(argValue(args, "page"), args.Has("page")); ok {
+		if *page < 1 {
+			return q, common.BadRequest("page must be at least 1")
+		}
 		q.Page = int(*page)
 	}
 	if limit, ok := common.ToOptionalInt(argValue(args, "limit"), args.Has("limit")); ok {
+		if *limit < 1 {
+			return q, common.BadRequest("limit must be at least 1")
+		}
+		if *limit > marketplaceMaxLimit {
+			return q, common.BadRequest(fmt.Sprintf("limit must be at most %d", marketplaceMaxLimit))
+		}
 		q.Limit = int(*limit)
 	}
 	if s, ok := common.ToOptionalString(argValue(args, "q"), args.Has("q")); ok {
@@ -156,13 +172,30 @@ type param struct {
 	present bool
 }
 
-// paramWithFallback resolves canonical name against a deprecated alias.
+// paramWithFallback resolves the canonical name against a deprecated alias.
+//
+// An empty canonical value is treated as absent, which is the rule that matters
+// and the one that is easy to get backwards. The original read
+// `equipment_type ?? equipmentType` and then normalised, where normalisation
+// collapses "" to undefined -- so `?equipment_type=` fell through to the alias
+// rather than suppressing it.
+//
+// Checking mere presence instead would make `?equipment_type=&equipmentType=Weapon`
+// mean "no equipment filter" where the original meant "Weapon". A URL carrying
+// both spellings is what a stale query string looks like, and silently dropping
+// the filter is the worst possible reading of it.
 func paramWithFallback(args *fasthttp.Args, canonical, alias string) param {
-	if args.Has(canonical) {
-		return param{value: joinAll(args, canonical), present: true}
+	if v := joinAll(args, canonical); args.Has(canonical) && strings.TrimSpace(v) != "" {
+		return param{value: v, present: true}
 	}
-	if args.Has(alias) {
-		return param{value: joinAll(args, alias), present: true}
+	if v := joinAll(args, alias); args.Has(alias) && strings.TrimSpace(v) != "" {
+		return param{value: v, present: true}
+	}
+	// Present but empty on the canonical name, with nothing on the alias: the
+	// caller asked for no filter, and that is still not the same as "absent" for
+	// a filter the UI is clearing.
+	if args.Has(canonical) && !args.Has(alias) {
+		return param{value: "", present: true}
 	}
 	return param{}
 }

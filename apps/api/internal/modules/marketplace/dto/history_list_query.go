@@ -2,6 +2,8 @@ package dto
 
 import (
 	"database/sql"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,13 +83,26 @@ func (q HistoryListQuery) Offset() int { return (q.Page - 1) * q.Limit }
 
 // ParseHistoryListQuery reads the query string.
 func ParseHistoryListQuery(c *fiber.Ctx) (HistoryListQuery, error) {
-	args := c.Context().QueryArgs()
+	return parseHistoryQuery(c.Context().QueryArgs())
+}
+
+// parseHistoryQuery is the testable core; see parseMarketplaceQuery.
+func parseHistoryQuery(args *fasthttp.Args) (HistoryListQuery, error) {
 	q := HistoryListQuery{}
 
 	if page, ok := common.ToOptionalInt(argValue(args, "page"), args.Has("page")); ok {
+		if *page < 1 {
+			return q, common.BadRequest("page must be at least 1")
+		}
 		q.Page = int(*page)
 	}
 	if limit, ok := common.ToOptionalInt(argValue(args, "limit"), args.Has("limit")); ok {
+		if *limit < 1 {
+			return q, common.BadRequest("limit must be at least 1")
+		}
+		if *limit > historyMaxLimit {
+			return q, common.BadRequest(fmt.Sprintf("limit must be at most %d", historyMaxLimit))
+		}
 		q.Limit = int(*limit)
 	}
 
@@ -105,10 +120,17 @@ func ParseHistoryListQuery(c *fiber.Ctx) (HistoryListQuery, error) {
 	// itemName wins over the deprecated q alias whenever itemName is present,
 	// including when it is empty. An emptied itemName box means "no item name
 	// filter", which is not the same question as "the item name is empty".
-	if args.Has("itemName") {
+	// An empty itemName falls through to the deprecated q alias rather than
+	// suppressing it. The original read `(itemName ?? q)?.trim()` after a
+	// transform that collapsed "" to undefined, so presence alone is not the
+	// test -- a value is required. `?itemName=&q=sword` means "sword".
+	if v := joinAll(args, "itemName"); args.Has("itemName") && strings.TrimSpace(v) != "" {
 		q.ItemName = patternParam(args, "itemName")
 	} else if args.Has("q") {
 		q.ItemName = patternParam(args, "q")
+	} else if args.Has("itemName") {
+		// Present but empty, with no alias to fall back on: no filter.
+		q.ItemName = nil
 	}
 
 	if token, ok := common.ToOptionalInt(argValue(args, "tokenId"), args.Has("tokenId")); ok {
@@ -161,16 +183,22 @@ func ParseDay(value string, present bool) (*time.Time, bool) {
 	if !ok {
 		return nil, false
 	}
-	if len(*s) < 10 {
+	// The whole trimmed value must be a day. Truncating to the first ten
+	// characters would accept "2026-09-01T10:00:00" and silently apply the
+	// filter the client asked for with a boundary it never chose; the original
+	// anchored the pattern at both ends and dropped anything else.
+	if !dayPattern.MatchString(*s) {
 		return nil, false
 	}
-	day := (*s)[:10]
-	t, err := time.Parse("2006-01-02", day)
+	t, err := time.Parse("2006-01-02", *s)
 	if err != nil {
 		return nil, false
 	}
 	return &t, true
 }
+
+// dayPattern matches a bare YYYY-MM-DD, anchored so a timestamp is not one.
+var dayPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // PatternOf wraps a value in % signs, for the case-folded substring filters.
 // Shared with the marketplace list so both define "substring match" once.

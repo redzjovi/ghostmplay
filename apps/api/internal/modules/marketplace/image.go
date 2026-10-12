@@ -125,18 +125,23 @@ func BuildImageUrl(ipfsBase string, raw string) string {
 
 // ParseTraitPairs turns the upstream's flat trait list into a lookup.
 //
-// Each entry is "Key=Value". The split is on the FIRST '=' only, so a value
-// containing '=' is preserved rather than truncated at it -- there is no such
-// value today, and silently changing this to SplitN-with-a-limit-of-2 in both
-// directions would be the kind of change that is right for the wrong reason.
+// Each entry is "Key=Value", split on the FIRST '=' only so a value containing
+// '=' survives intact.
+//
+// A pair with no '=' at all still records its key, with an empty value. That is
+// the original's behaviour and it is not a detail: the lookup treats "present"
+// and "absent" differently from "empty", so "Equipment Type" with no value
+// yields an empty equipment type, where skipping the pair would silently
+// substitute the "Item" default. Only an empty KEY is skipped -- there is
+// nothing to file it under.
 func ParseTraitPairs(pairs []string) map[string]string {
 	out := make(map[string]string, len(pairs))
 	for _, p := range pairs {
-		key, rest, found := strings.Cut(p, "=")
-		if !found || key == "" {
+		key, value, _ := strings.Cut(p, "=")
+		if key == "" {
 			continue
 		}
-		out[strings.TrimSpace(key)] = strings.TrimSpace(rest)
+		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
 	return out
 }
