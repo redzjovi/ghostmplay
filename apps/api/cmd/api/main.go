@@ -153,7 +153,7 @@ func wire(env config.Env, log *slog.Logger, queries dbgen.Querier, txManager dat
 		Log:         log,
 		Guards:      guards,
 		Auth:        authController,
-		Health:      health.NewHandler(health.SQLChecker{DB: db}),
+		Health:      health.NewHandler(health.SQLChecker{DB: db}, log),
 		Marketplace: marketplace.NewController(marketplaceService, upstream, log, env),
 		History:     marketplace.NewHistoryController(historyService, log, env),
 		Favorites:   marketplace.NewFavoritesController(marketplaceService),

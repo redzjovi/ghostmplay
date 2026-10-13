@@ -114,13 +114,32 @@ reporting the same error either way. In the log it looks like this:
 
 ```
 migrations up to date
-listening ... port=3000       ← the service is healthy, 384ms after boot
-...                           ← two minutes of serving, then:
+listening ... port=3000       ← healthy, 157ms later
+...                           ← two minutes of serving requests, then:
 Deploy aborted - your service did not pass its health check.
 ```
 
 The service was never broken. It was answering 503 on the one path that is
 meant to refuse, and the platform believed it.
+
+### Reading the probe log
+
+A health probe never reaches a route that used to log anything, so an abort left
+no record of what was actually asked. It is now logged, which makes the cause
+readable from the deploy log instead of inferred:
+
+| Log line | What it means |
+|---|---|
+| `health checks answer on these paths api=/api/health root=/health siteRoot=503` | Printed at boot. Compare against the setting above. |
+| `served the no-web-build page at the site root ... status=503` | The probe hit `/`. Point the health check at `/api/health`. |
+| `no route matched and there is no web build to fall back to ... status=404` | The probe hit a path this service does not serve — a typo, or a trailing slash. |
+| `health check reporting unhealthy: database unreachable` | The probe hit a health path and the database was genuinely down. |
+
+**If an aborted deploy contains none of these**, the probe never reached the
+process at all, which points at the port or at routing rather than the path.
+
+`/health` and `/api/health` both answer 200 whenever the database is reachable,
+so either is a valid setting.
 
 ## 5. Environment variables
 
@@ -197,6 +216,8 @@ If the deploy fails:
 | "failed to start", nothing listening | Wrong start command, or a crash on boot | The runtime log has the reason. Check `DATABASE_URL` first — a wrong one fails the boot ping. |
 | Live but every request 502s | The database is unreachable | `curl /api/health`; it returns 503 with `database: down`. |
 | `Deploy aborted - your service did not pass its health check`, but `/api/health` is 200 | The check points at `/` and no web build is deployed | Point the check at `/api/health`. See step 4. |
+| Aborted, and the log has **no** probe line | The probe never reached the process — wrong port or routing | Compare Voroa's assigned port against `listening ... port=`. |
+| `health check reporting unhealthy: database unreachable` | The probe hit a health path and the database was down | Read the `error` field. The service refuses to boot on a dead database, so this means it died after boot. |
 | `no web build found; serving the API only` | The build command did not produce `apps/api/public` | Add the SPA build to the build command, see step 6. The log lists every path searched. |
 | Sync fails, log says `cause=upstream` with `upstream_status=400` | The upstream is refusing us, not our bug | Check `market-api.numine.io`; the log carries their error in `upstream_said`. Nothing to fix here. |
 | Sync fails, log says `cause=internal` | Our bug | Read the `error` field. |

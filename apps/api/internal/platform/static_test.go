@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -177,4 +178,84 @@ func readBody(t *testing.T, res *http.Response) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// --- probe logging: making an aborted deploy diagnosable ----------------------
+
+// capturedLogger keeps log lines so a test can assert on what was recorded.
+type capturedLogger struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *capturedLogger) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, string(p))
+	return len(p), nil
+}
+
+func (c *capturedLogger) contains(needle string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, l := range c.lines {
+		if strings.Contains(l, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// The site root is the most likely thing for a platform to probe, and it answers
+// 503 on purpose. Without this line a deploy that aborts on "/" and one that
+// aborts on a mistyped path are indistinguishable in the log.
+func TestSiteRootProbeIsLogged(t *testing.T) {
+	sink := &capturedLogger{}
+	app := fiber.New()
+	app.Use(noWebBuild(slog.New(slog.NewTextHandler(sink, nil)), nil))
+
+	res := doRequest(t, app, "/")
+	if res.StatusCode != 503 {
+		t.Fatalf("status = %d, want 503", res.StatusCode)
+	}
+
+	for _, want := range []string{"served the no-web-build page", "path=/", "status=503"} {
+		if !sink.contains(want) {
+			t.Errorf("log does not mention %q; got:\n%s", want, strings.Join(sink.lines, ""))
+		}
+	}
+}
+
+// A probe aimed at a path this process does not serve returned a bare 404 with
+// no log at all, which is what made an aborted deploy undiagnosable: this line
+// is how the next one gets explained.
+func TestUnmatchedProbeIsLogged(t *testing.T) {
+	sink := &capturedLogger{}
+	app := fiber.New()
+	app.Use(noWebBuild(slog.New(slog.NewTextHandler(sink, nil)), nil))
+
+	res := doRequest(t, app, "/healthcheck")
+	if res.StatusCode != 404 {
+		t.Fatalf("status = %d, want 404", res.StatusCode)
+	}
+
+	for _, want := range []string{"no route matched", "path=/healthcheck", "status=404"} {
+		if !sink.contains(want) {
+			t.Errorf("log does not mention %q; got:\n%s", want, strings.Join(sink.lines, ""))
+		}
+	}
+}
+
+func TestUnmatchedAPIPathIsLogged(t *testing.T) {
+	sink := &capturedLogger{}
+	app := fiber.New()
+	app.Use(noWebBuild(slog.New(slog.NewTextHandler(sink, nil)), nil))
+
+	res := doRequest(t, app, "/api/health")
+	if res.StatusCode != 404 {
+		t.Fatalf("status = %d, want 404", res.StatusCode)
+	}
+	if !sink.contains("path=/api/health") {
+		t.Errorf("an unmatched /api path was not logged; got:\n%s", strings.Join(sink.lines, ""))
+	}
 }

@@ -114,6 +114,20 @@ func New(cfg Config) *fiber.App {
 		app.Use(noWebBuild(cfg.Log, cfg.Env.WebRootCandidates))
 	}
 
+	// Named at boot so the health check path configured on the platform can be
+	// diffed against what this process actually answers, instead of recalled.
+	//
+	// A deploy that aborts on "did not pass its health check" is otherwise
+	// undiagnosable from the application side: the probe never reaches a route
+	// that logs, so nothing distinguishes a probe aimed at a path that 404s from
+	// one aimed at a path that 503s. Both look identical in the log.
+	//
+	// One line on purpose -- a platform's failure snapshot keeps only the last
+	// 50 lines of output, so verbosity here would evict the evidence.
+	cfg.Log.Info("health checks answer on these paths",
+		"api", "/api/health", "root", "/health", "siteRoot", 503,
+		"note", "siteRoot is 503 while no web build is deployed")
+
 	return app
 }
 

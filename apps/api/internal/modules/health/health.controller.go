@@ -9,6 +9,7 @@ package health
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -32,12 +33,16 @@ func (c SQLChecker) Ping(ctx context.Context) error { return c.DB.PingContext(ct
 // Handler answers the health probe.
 type Handler struct {
 	checker   Checker
+	log       *slog.Logger
 	startedAt time.Time
 }
 
 // NewHandler builds the handler.
-func NewHandler(checker Checker) *Handler {
-	return &Handler{checker: checker, startedAt: time.Now()}
+//
+// The logger may be nil, which keeps the handler usable in tests that do not
+// care about output.
+func NewHandler(checker Checker, log *slog.Logger) *Handler {
+	return &Handler{checker: checker, log: log, startedAt: time.Now()}
 }
 
 // Check reports service health.
@@ -47,15 +52,27 @@ func NewHandler(checker Checker) *Handler {
 // that says `database: down` next to a 200 would be reported as healthy by
 // exactly the thing that is supposed to notice.
 func (h *Handler) Check(c *fiber.Ctx) error {
-	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
+	// Background rather than c.Context(): the latter is Fiber's pooled
+	// *fasthttp.RequestCtx, and using a pooled request context as the parent of
+	// a database call is fragile. The 3s timeout below is what bounds this.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	database := "up"
-	if err := h.checker.Ping(ctx); err != nil {
+	pingErr := h.checker.Ping(ctx)
+	if pingErr != nil {
 		database = "down"
 	}
 
 	if database == "down" {
+		// Logged, because returning 503 silently is how a deploy aborts with no
+		// explanation in the log. This is the one case where the health path is
+		// configured correctly and still fails, and without this line it looks
+		// identical to a probe aimed at the wrong path.
+		if h.log != nil {
+			h.log.Warn("health check reporting unhealthy: database unreachable",
+				"method", c.Method(), "path", c.Path(), "status", 503, "error", pingErr.Error())
+		}
 		return common.ServiceUnavailable("database unreachable")
 	}
 

@@ -68,11 +68,34 @@ func spaHandler(root string, log *slog.Logger) fiber.Handler {
 func noWebBuild(log *slog.Logger, candidates []string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if strings.HasPrefix(c.Path(), "/api/") {
+			// Logged, because returning 404 silently is what made an aborted
+			// deploy undiagnosable. A platform probing a path this process does
+			// not serve, and a person mistyping one, produce byte-identical
+			// silence; only one of them explains why a deploy did not go live.
+			log.Warn("no route matched and there is no web build to fall back to",
+				"method", c.Method(), "path", c.Path(),
+				"status", fiber.StatusNotFound, "from", c.IP())
 			return fiber.ErrNotFound
 		}
 		if c.Path() != "/" {
+			log.Warn("no route matched and there is no web build to fall back to",
+				"method", c.Method(), "path", c.Path(),
+				"status", fiber.StatusNotFound, "from", c.IP())
 			return fiber.ErrNotFound
 		}
+
+		// The site root answers 503 while no SPA is deployed. That is deliberate:
+		// a missing frontend is a real fault, and reporting 200 would hide it.
+		//
+		// It is also the most likely thing for a platform to probe, so it is
+		// logged at WARN with the status returned. On a deploy that aborts on its
+		// health check, this line is the difference between knowing the probe hit
+		// "/" and only suspecting it.
+		log.Warn("served the no-web-build page at the site root",
+			"method", c.Method(), "path", c.Path(),
+			"status", fiber.StatusServiceUnavailable, "from", c.IP(),
+			"fix", "point the platform health check at /api/health or /health, "+
+				"or build the SPA into apps/api/public")
 
 		c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
 		c.Set(fiber.HeaderCacheControl, "no-store")
