@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sqlc-dev/pqtype v0.3.0
 	github.com/valyala/fasthttp v1.75.0
 	golang.org/x/oauth2 v0.37.0
@@ -26,7 +27,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/molecule-man/go-brrr v1.1.1 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.opentelemetry.io/otel/metric v1.45.0 // indirect
 	go.opentelemetry.io/otel/trace v1.45.0 // indirect
