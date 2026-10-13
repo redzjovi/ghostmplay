@@ -27,6 +27,20 @@ has been pushed.
 git push origin <branch>
 ```
 
+Name the branch the same one Voroa has configured under **Settings → Source →
+Branch**. Voroa builds that branch and ignores pushes to every other one, so a
+correct deploy of a commit that was pushed to the wrong branch looks exactly
+like no deploy at all.
+
+If more than one local branch has your work — `master` and `go` both did at one
+point — check which is ahead before deploying:
+
+```
+git log --oneline origin/<branch>..HEAD
+```
+
+Anything listed there is not on the platform yet.
+
 ## 2. Decide what to do about the database
 
 You have two options, and the difference is whether you keep the data you have
@@ -91,6 +105,22 @@ reporting a green process that 502s on every request.
 If you build the web app as well (step 6), `/` serves the SPA and can be used,
 but point the check at `/api/health` anyway: it tests the API without depending
 on the frontend being deployed.
+
+**Check this field before anything else when a deploy aborts.** The cost of
+getting it wrong is high and the fix is instant. A probe on `/` with no web
+build does not fail fast — Voroa waits out the entire startup window before
+giving up, so the deploy spends a couple of minutes doing nothing before
+reporting the same error either way. In the log it looks like this:
+
+```
+migrations up to date
+listening ... port=3000       ← the service is healthy, 384ms after boot
+...                           ← two minutes of serving, then:
+Deploy aborted - your service did not pass its health check.
+```
+
+The service was never broken. It was answering 503 on the one path that is
+meant to refuse, and the platform believed it.
 
 ## 5. Environment variables
 
@@ -171,7 +201,50 @@ If the deploy fails:
 | Sync fails, log says `cause=internal` | Our bug | Read the `error` field. |
 | `/admin/data` 403s | `GOOGLE_ADMIN_EMAILS` is empty | Add the verified address and sign in again. |
 
-## 8. Adopting an existing database
+## 8. Why a deploy feels slow
+
+Almost always it is not the build, and the log says so. Compare these two lines:
+
+```
+migrations up to date
+listening ... port=3000          ← 384ms later
+```
+
+The service is up almost immediately. If the deploy *still* fails, it spent its
+whole window waiting on a health probe that was never going to pass, and
+`Deploy aborted` arrives minutes later — which reads like a slow build and is
+actually a slow failure. Check the health check path first; it is the single
+most common cause and costs nothing to verify.
+
+Measured on this repository, for scale:
+
+| Stage | Time |
+|---|---|
+| `go build` (cold, no cache) | 23s |
+| `go build` (warm) | 2s |
+| Module download | reused while `go.sum` is unchanged |
+| Boot to listening | under 0.5s |
+
+To keep it that way:
+
+- **Keep the build command to one `go build`.** Running the test suite in the
+  build step roughly doubles the minutes each deploy costs, and the suite is
+  already run before anything is pushed.
+- **Commit `go.sum`.** Voroa reuses installed dependencies while the lockfile is
+  unchanged; a missing or frequently-edited lockfile reinstalls them every
+  deploy. It is committed.
+- **Add build filters** under Build & Deploy so that editing this file, or a
+  README, does not trigger a full build of a Go service.
+- **Leave the binary unstripped for now.** `-ldflags="-s -w"` would take it from
+  22M to 16M, which saves well under a second against a 23s compile. Only worth
+  it if the build stops being the bottleneck.
+
+There is no build-cache setting exposed for the standard runtime. If the build
+ever does become the bottleneck, the escape hatch is the Docker runtime with
+`RUN --mount=type=cache,target=/root/.cache/go-build`, which turns a 23s cold
+build into 2s — a larger change than it is worth for a service this size.
+
+## 9. Adopting an existing database
 
 If you imported the cPanel database (option A), that database already has the
 schema and will also carry TypeORM's own bookkeeping. The baseline migration
@@ -192,14 +265,14 @@ TypeORM chain, one through the baseline — and diffs them.
 If you have `migrate` installed locally you can run it from `apps/api` with
 `make migrate-force VERSION=1`.
 
-## 9. Redeploying
+## 10. Redeploying
 
 Push to the deployment branch. Auto-deploy (on by default) builds and swaps.
 A failed build or a crash keeps the previous version serving.
 
 For a manual redeploy, use the Deploy button in the dashboard.
 
-## 10. Things that are specific to this app
+## 11. Things that are specific to this app
 
 ### One process
 
