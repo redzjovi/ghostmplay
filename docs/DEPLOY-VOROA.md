@@ -69,24 +69,72 @@ produced, which is checked by the test suite.
 From the dashboard: **New → Web Service**.
 
 - **Repository / branch**: the repository and the branch you just pushed.
-- **Root directory**: `apps/api`. This is the whole Go module. Voroa builds from
-  this directory and finds `go.mod` there.
+- **Root directory**: `/` — the **repository root**, not `apps/api`.
 
-  Leave this set. If it is empty, Voroa will not find the module and the deploy
-  fails with "did not find the file your language uses to declare its
-  dependencies".
-- **Build command**: see step 6. It is the one command that has to build both the
-  SPA and the binary, because the SPA has to be in place before the API starts.
-- **Start command**: `./bin/api`
+  This is the setting that makes the build work. The image builds both the SPA
+  and the Go binary, and the web build needs the workspace manifest, the lockfile
+  and `packages/shared`, all of which sit outside `apps/api`. With the root
+  directory set to `apps/api` the build context contains only the Go module and
+  the first `COPY` fails.
 
-You do not need a Dockerfile. Voroa detects Go from `go.mod` and installs the
-toolchain itself.
+  It also changes what Voroa detects. Pointed at `apps/api` it sees `go.mod`,
+  concludes "this is a Go service", and provisions Go alone — no Node, no pnpm —
+  which is why an earlier attempt failed with `pnpm: command not found`.
+- **Runtime**: **Docker (Dockerfile)**.
+- **Dockerfile path**: `/apps/api/Dockerfile`.
 
-**`sqlc` is not run on the platform.** The generated query code is committed at
-`apps/api/db/sqlc`, so the build needs nothing but Go. If you change a query,
-run `make generate` locally and commit the result.
+  The path is chosen at creation and cannot be changed afterwards, so it has to
+  be right the first time. `/Dockerfile` will not find it.
+- **Build command**: leave **empty**.
+- **Start command**: leave **empty**.
+
+  The image's `CMD` starts the binary, and Voroa ignores these fields for a
+  Docker runtime.
+
+### What the Dockerfile gives you
+
+`apps/api/Dockerfile` pins both toolchains — `node:22` for the SPA and
+`golang:1.26` for the API — which the build-command approach could not do. It
+also removes the per-deploy `go: downloading go1.26.5` you see in a build log:
+the version comes from the base image rather than being fetched because the
+platform's Go is older than `go.mod` requires.
+
+Node 22 is not incidental. `packageManager` pins `pnpm@11.6.0`, and pnpm 11
+requires Node 22+; `@vueuse/core` declares `engines.node >=22`. On Node 20 the
+install cannot succeed.
+
+### Health checks under Docker
+
+**The Health Check Path field has no effect here.** Voroa cannot assume anything
+is present inside an image it did not build, so for a Docker runtime it waits
+according to the image's own `HEALTHCHECK`:
+
+| Dockerfile declares | Readiness decided by |
+|---|---|
+| a `HEALTHCHECK` | that check; a container reporting unhealthy fails the deploy |
+| no `HEALTHCHECK` | something accepting a connection on the port |
+
+Ours runs `/app/bin/api -healthcheck`, which issues a real request against
+`/api/health` and exits non-zero when the database is unreachable — stricter
+than a TCP connect, and it needs no `curl` in the image. Without it, a service
+that started but cannot reach its database would look healthy.
+
+### Switching an existing service
+
+Runtime and Dockerfile path are fixed at creation, so moving an existing service
+onto this image means **creating a new one**. It gets a new URL; re-enter the
+environment variables, the domain and the redirect URI from step 5.
+
+You can keep the old service running until the new one passes its health check,
+then delete it.
 
 ## 4. Health check
+
+**Under the Docker runtime this field is ignored.** Readiness comes from the
+image's `HEALTHCHECK`, which the Dockerfile provides. See step 3.
+
+The rest of this section applies only if you deploy without Docker, where
+setting it correctly does matter.
 
 Set the **Health Check Path** to `/api/health`.
 
@@ -166,65 +214,50 @@ API. The recommended setup is a single origin, in which case it is unset and the
 built `public/` beside the binary is found automatically — but only if you also
 build the web app. See the next step.
 
-## 6. Serving the web app from the same service (recommended)
+## 6. Serving the web app
 
-The API serves the SPA when a build is present beside the binary. Without one it
-runs API-only, which is a valid mode — but then step 4's health check is the
-only thing standing between you and the 503 abort above.
+The API serves the SPA from `public/` when it is present, and runs API-only when
+it is not. Under the Docker runtime in step 3 this is already handled: the image
+builds the SPA and copies it to `/app/public` beside the binary, so the home
+page is the app and no `WEB_ROOT` is needed.
 
-**Use one service.** It keeps the session cookie first-party, so `SameSite=Strict`
-still works and sign-in needs no CORS exceptions. Set the **Build Command** to:
+Nothing about this is automatic if you leave the Docker runtime. With a
+build-command setup instead, the command would have to build both:
 
 ```bash
-pnpm install --frozen-lockfile && pnpm --filter @ghostmplay/web build \
+pnpm install --frozen-lockfile && pnpm --filter @ghostmplay/shared build \
+  && pnpm --filter @ghostmplay/web build \
   && rm -rf public && cp -r ../../apps/web/dist public \
   && go build -trimpath -o bin/api ./cmd/api
 ```
 
-That installs the workspace (the SPA needs `packages/shared` types, which live
-in this repository), builds the SPA, copies the output to `public/` — which is
-the first path the API checks — and only then builds the binary. Keep the start
-command as it is.
+`shared` must be built before `web`: `@ghostmplay/shared` resolves `main` and
+`types` to `./dist`, and `apps/web` imports it, so building `web` against an
+unbuilt `shared` produces a bundle with unresolved types rather than a build
+error. The Dockerfile does the same, in the same order.
 
-The paths are relative to the build root, `apps/api`, so the SPA output is two
-levels up. Get that wrong and `cp` fails, which is a much clearer signal than
-the 503 below.
+This alternative is recorded rather than recommended. It cannot pin the Node
+version — Voroa provisions Node only for services it detects as Node projects —
+and it leaves the `go1.26.5` download in place.
 
-### Node version: it must be declared in the build root
+### Why one service rather than two
 
-The build needs Node 22, and Voroa will only use it if the version is declared
-**in the root directory you set above** — `apps/api`, not the repository root.
-Voroa resolves `.nvmrc`, `.node-version` and `engines.node` relative to that
-directory, so a declaration at the repository root is invisible to it and the
-service silently builds on Node 20.
+Serving the SPA from the API keeps the session cookie first-party, so
+`SameSite=Strict` still applies and sign-in needs no CORS exceptions. A separate
+static site means two deploys to keep in step, and because the origins differ the
+cookie then needs `SameSite=None; Secure` plus a matching `CORS_ORIGINS` entry.
 
-That matters here: `@vueuse/core` requires `>=22`, so building on 20 fails or
-produces a broken bundle. `apps/api/.nvmrc` exists for exactly this reason and
-must stay in step with the one at the repository root.
-
-### What this costs
-
-Building the SPA roughly doubles the build: expect ~45s → ~90–120s, because the
-Go build now also installs ~309 npm packages and runs `vue-tsc` before Vite.
-A `pnpm` store cache makes repeat builds faster.
-
-**Two services**, if you would rather not pay that: deploy a separate static
-site for `apps/web/dist`. Two deploys to keep in step, and because the origins
-differ the session cookie needs `SameSite=None; Secure` plus a corresponding
-`CORS_ORIGINS` entry. Set the Google redirect URI to match.
-
-Whichever you pick, set the Google redirect URI and the cookie policy to match.
+If you do split them, set the Google redirect URI and the cookie policy to
+match.
 
 ### One caveat about the health check
 
-Once the SPA is served, **any extensionless path returns 200** — because
-`/marketplaces` is a client-side route and correctly resolves to `index.html`.
-A health probe aimed at a mistyped path will therefore pass without ever
-touching the API.
+Once the SPA is served, **any extensionless path returns 200** — `/marketplaces`
+is a client-side route and correctly resolves to `index.html`. A probe aimed at a
+mistyped path would pass without ever touching the API.
 
-So even though `/` now answers 200 and a probe pointed there would succeed,
-keep the health check on `/api/health`. It is the only path that tests the
-database rather than the existence of a file.
+So keep probing `/api/health`. It is the only path that tests the database rather
+than the existence of a file.
 
 ## 7. First deploy
 
@@ -236,14 +269,12 @@ If the deploy fails:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| "did not find go.mod" | Root directory is wrong | Set it to `apps/api`. |
-| "build failed" at `go build` | A compile error, or the module was not committed | Read the build log; `make check` locally. |
-| "failed to start", nothing listening | Wrong start command, or a crash on boot | The runtime log has the reason. Check `DATABASE_URL` first — a wrong one fails the boot ping. |
+| `pnpm: command not found` | Root directory is `apps/api`, so Voroa detected Go and provisioned no Node or pnpm | Set Root directory to `/` and use the Docker runtime, step 3. |
+| `Your base image requires...` / `COPY failed: no such file` | Root directory is not the repository root, so the context lacks the workspace manifest | Same as above. |
+| `failed to start`, nothing listening | `DATABASE_URL` wrong, or a crash on boot | The runtime log has the reason. A bad database fails the boot ping before anything listens. |
+| `Deploy aborted...` and the container is `unhealthy` | The image's `HEALTHCHECK` failed — usually the database | `docker logs` on the equivalent local build shows why; the same `error` field appears at runtime. |
 | Live but every request 502s | The database is unreachable | `curl /api/health`; it returns 503 with `database: down`. |
-| `Deploy aborted - your service did not pass its health check`, but `/api/health` is 200 | The check points at `/` and no web build is deployed | Point the check at `/api/health`. See step 4. |
-| Aborted, and the log has **no** probe line | The probe never reached the process — wrong port or routing | Compare Voroa's assigned port against `listening ... port=`. |
-| `health check reporting unhealthy: database unreachable` | The probe hit a health path and the database was down | Read the `error` field. The service refuses to boot on a dead database, so this means it died after boot. |
-| `no web build found; serving the API only` | The build command did not produce `apps/api/public` | Add the SPA build to the build command, see step 6. The log lists every path searched. |
+| `no web build found; serving the API only` | `/app/public` is missing from the image | The web stage did not run. Check the build log for the `pnpm` step. |
 | Sync fails, log says `cause=upstream` with `upstream_status=400` | The upstream is refusing us, not our bug | Check `market-api.numine.io`; the log carries their error in `upstream_said`. Nothing to fix here. |
 | Sync fails, log says `cause=internal` | Our bug | Read the `error` field. |
 | `/admin/data` 403s | `GOOGLE_ADMIN_EMAILS` is empty | Add the verified address and sign in again. |

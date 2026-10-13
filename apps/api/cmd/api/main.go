@@ -10,9 +10,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,10 +43,68 @@ import (
 const shutdownGrace = 15 * time.Second
 
 func main() {
+	// A container health check runs this same binary. It must work without a
+	// database URL, without migrations and without binding a port, so it is
+	// handled before anything else is loaded.
+	if len(os.Args) > 1 && os.Args[1] == healthcheckFlag {
+		os.Exit(healthcheck())
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "[bootstrap] failed to start: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// healthcheckFlag is the argument a container health check passes.
+const healthcheckFlag = "-healthcheck"
+
+// healthcheckExit codes. Distinguishable because "no server listening" and "the
+// database is down" are different failures, and a platform log that can tell
+// them apart is worth more than one that cannot.
+const (
+	healthcheckOK          = 0
+	healthcheckUnhealthy   = 1
+	healthcheckUnreachable = 2
+)
+
+// healthcheck probes the running service and reports whether it is ready.
+//
+// It reuses the binary rather than installing curl or wget into the runtime
+// image, which keeps the image smaller and, more usefully, means the check is
+// the same code path the service itself uses -- so it cannot drift from what the
+// service actually does.
+//
+// The platform supplies PORT; when it is absent the service defaults to 8080, so
+// the probe targets the same port the server bound.
+func healthcheck() int {
+	// The same default the server itself falls back to, reached without loading
+	// config: a health check must work without a database URL. Reading the raw
+	// variable keeps this independent of everything run() would require.
+	port := 8080
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("PORT"))); err == nil && v > 0 {
+		port = v
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/health", port)
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %s unreachable: %v\n", url, err)
+		return healthcheckUnreachable
+	}
+	defer resp.Body.Close()
+
+	// The body is read and discarded rather than ignored: a connection closed
+	// mid-response would otherwise count as a healthy 200.
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: %s returned %d\n", url, resp.StatusCode)
+		return healthcheckUnhealthy
+	}
+	return healthcheckOK
 }
 
 func run() error {

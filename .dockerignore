@@ -1,0 +1,51 @@
+# The build context is the repository root, and Voroa uploads all of it. Without
+# this, node_modules and build output are shipped to the builder on every deploy
+# -- hundreds of megabytes that the build never reads.
+#
+# What is excluded is everything the image does not need. The stages COPY the
+# manifests and source they actually build from.
+
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build output. The web stage produces dist inside the image, so a local one is
+# stale by definition.
+#
+# packages/shared/dist is deliberately NOT excluded. @ghostmplay/shared points
+# main and types at ./dist, and apps/web imports it, so a clean build has to
+# compile it rather than reuse whatever happened to be on the developer's disk.
+# Excluding it here silently depends on a local build having run first.
+dist
+apps/web/dist
+apps/api/public
+apps/api/bin
+
+# VCS and tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Environment files. Secrets must never enter an image layer, where anyone who
+# can inspect the image can read them back. These are provided as build-time or
+# runtime variables by the platform instead.
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise
+.DS_Store
+*.swp
+
+# Documentation and local compose files are not part of the build.
+docs
+README.md
+*.md
+docker-compose*.yml
+scripts/dev-services.sh
+
+# sqlc regenerates from db/schema.sql; the generated code is committed and is
+# needed, but the generator's config and the seeds are not.
+apps/api/sqlc.yaml

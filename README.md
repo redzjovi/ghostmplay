@@ -276,29 +276,30 @@ fails closed: a route is gated unless it carries `meta.public`.
 
 The target is **Voroa** (getvoroa.com) — a GitHub-native PaaS that builds this
 repository, runs it in a container in India, and terminates HTTPS in front of it.
-There is no Docker image and no artifact directory: the platform detects Go from
-`go.mod`, installs the toolchain, runs the build command, and starts the result.
+Deploys through a Dockerfile, because the service is two toolchains: `node:22`
+builds the SPA and `golang:1.26` builds the API. Voroa's automatic path detects
+`apps/api/go.mod`, concludes "Go service", and provisions Go alone — no Node, no
+pnpm — which fails with `pnpm: command not found`. The base image pins both
+versions, and also removes the per-deploy `go: downloading go1.26.5`.
 
-- **Root directory**: `apps/api` (where `go.mod` lives). This also governs the
-  Node version: Voroa reads `.nvmrc` from the root directory, which is why
-  `apps/api/.nvmrc` exists and pins Node 22 for the SPA build.
-- **Build command** — builds the SPA and the binary, because the API serves the
-  built frontend from the same origin:
+- **Root directory**: `/` (the repository root). The build context must contain
+  the workspace manifest and `packages/shared`, both outside `apps/api`.
+- **Runtime**: Docker (Dockerfile).
+- **Dockerfile path**: `/apps/api/Dockerfile` — fixed at creation, so it must be
+  right the first time.
+- **Build command**, **Start command**: leave empty. The image's `CMD` runs the
+  binary, and Voroa ignores both for a Docker runtime.
 
-  ```bash
-  pnpm install --frozen-lockfile && pnpm --filter @ghostmplay/web build \
-    && rm -rf public && cp -r ../../apps/web/dist public \
-    && go build -trimpath -o bin/api ./cmd/api
-  ```
+Readiness comes from the image's `HEALTHCHECK`, not from a dashboard setting:
+Voroa ignores Health Check Path for Docker runtimes. Ours runs
+`bin/api -healthcheck`, which requests `/api/health` and fails when the database
+is unreachable.
 
-- **Start command**: `./bin/api` — reads `PORT`, binds `0.0.0.0`.
-- **Health check path**: `/api/health` — 503 when the database is unreachable, so a
-  broken service is reported as failed rather than live. Use this rather than `/`:
-  once the SPA is served, every extensionless path returns 200, so a root probe
-  would pass without testing anything.
+`PORT` is supplied by the platform and read by the binary; nothing is hardcoded.
+`sqlc` is not run on the platform — the generated code is committed. TLS
+termination is the platform's job.
 
-`sqlc` is not run on the platform; the generated code is committed. `PORT` and the
-TLS termination are the platform's job.
+Env vars, domain and the Google redirect URI are set on the service itself.
 
 **[docs/DEPLOY-VOROA.md](docs/DEPLOY-VOROA.md) is the runbook**: database creation
 or import, service settings, environment variables, Google sign-in, the one-command
