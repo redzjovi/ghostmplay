@@ -75,7 +75,8 @@ From the dashboard: **New → Web Service**.
   Leave this set. If it is empty, Voroa will not find the module and the deploy
   fails with "did not find the file your language uses to declare its
   dependencies".
-- **Build command**: `go build -trimpath -o bin/api ./cmd/api`
+- **Build command**: see step 6. It is the one command that has to build both the
+  SPA and the binary, because the SPA has to be in place before the API starts.
 - **Start command**: `./bin/api`
 
 You do not need a Dockerfile. Voroa detects Go from `go.mod` and installs the
@@ -186,20 +187,44 @@ the first path the API checks — and only then builds the binary. Keep the star
 command as it is.
 
 The paths are relative to the build root, `apps/api`, so the SPA output is two
-levels up. Get that wrong and `cp` fails; that is fine, but note it is the
-easiest thing to get wrong here, and a failing build is a much clearer signal
-than the 503 below.
+levels up. Get that wrong and `cp` fails, which is a much clearer signal than
+the 503 below.
 
-This needs Node and pnpm in the build image. If Voroa's Go build image has
-neither, use the two-service option below rather than trying to install a
-toolchain in a build step.
+### Node version: it must be declared in the build root
 
-**Two services**, if the build image cannot build the SPA: deploy a separate
-static site for `apps/web/dist`. Two deploys to keep in step, and because the
-origins differ the session cookie needs `SameSite=None; Secure` plus a
-corresponding `CORS_ORIGINS` entry. Set the Google redirect URI to match.
+The build needs Node 22, and Voroa will only use it if the version is declared
+**in the root directory you set above** — `apps/api`, not the repository root.
+Voroa resolves `.nvmrc`, `.node-version` and `engines.node` relative to that
+directory, so a declaration at the repository root is invisible to it and the
+service silently builds on Node 20.
+
+That matters here: `@vueuse/core` requires `>=22`, so building on 20 fails or
+produces a broken bundle. `apps/api/.nvmrc` exists for exactly this reason and
+must stay in step with the one at the repository root.
+
+### What this costs
+
+Building the SPA roughly doubles the build: expect ~45s → ~90–120s, because the
+Go build now also installs ~309 npm packages and runs `vue-tsc` before Vite.
+A `pnpm` store cache makes repeat builds faster.
+
+**Two services**, if you would rather not pay that: deploy a separate static
+site for `apps/web/dist`. Two deploys to keep in step, and because the origins
+differ the session cookie needs `SameSite=None; Secure` plus a corresponding
+`CORS_ORIGINS` entry. Set the Google redirect URI to match.
 
 Whichever you pick, set the Google redirect URI and the cookie policy to match.
+
+### One caveat about the health check
+
+Once the SPA is served, **any extensionless path returns 200** — because
+`/marketplaces` is a client-side route and correctly resolves to `index.html`.
+A health probe aimed at a mistyped path will therefore pass without ever
+touching the API.
+
+So even though `/` now answers 200 and a probe pointed there would succeed,
+keep the health check on `/api/health`. It is the only path that tests the
+database rather than the existence of a file.
 
 ## 7. First deploy
 

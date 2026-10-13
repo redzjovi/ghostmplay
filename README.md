@@ -279,11 +279,23 @@ repository, runs it in a container in India, and terminates HTTPS in front of it
 There is no Docker image and no artifact directory: the platform detects Go from
 `go.mod`, installs the toolchain, runs the build command, and starts the result.
 
-- **Root directory**: `apps/api` (where `go.mod` lives).
-- **Build command**: `go build -trimpath -o bin/api ./cmd/api`.
+- **Root directory**: `apps/api` (where `go.mod` lives). This also governs the
+  Node version: Voroa reads `.nvmrc` from the root directory, which is why
+  `apps/api/.nvmrc` exists and pins Node 22 for the SPA build.
+- **Build command** — builds the SPA and the binary, because the API serves the
+  built frontend from the same origin:
+
+  ```bash
+  pnpm install --frozen-lockfile && pnpm --filter @ghostmplay/web build \
+    && rm -rf public && cp -r ../../apps/web/dist public \
+    && go build -trimpath -o bin/api ./cmd/api
+  ```
+
 - **Start command**: `./bin/api` — reads `PORT`, binds `0.0.0.0`.
 - **Health check path**: `/api/health` — 503 when the database is unreachable, so a
-  broken service is reported as failed rather than live.
+  broken service is reported as failed rather than live. Use this rather than `/`:
+  once the SPA is served, every extensionless path returns 200, so a root probe
+  would pass without testing anything.
 
 `sqlc` is not run on the platform; the generated code is committed. `PORT` and the
 TLS termination are the platform's job.

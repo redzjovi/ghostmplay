@@ -122,13 +122,32 @@ func New(cfg Config) *fiber.App {
 	// that logs, so nothing distinguishes a probe aimed at a path that 404s from
 	// one aimed at a path that 503s. Both look identical in the log.
 	//
+	// The site root's status is derived rather than hardcoded, because it changes
+	// once a web build is deployed. A line claiming 503 next to a service that
+	// answers 200 there is worse than no line at all.
+	//
 	// One line on purpose -- a platform's failure snapshot keeps only the last
 	// 50 lines of output, so verbosity here would evict the evidence.
 	cfg.Log.Info("health checks answer on these paths",
-		"api", "/api/health", "root", "/health", "siteRoot", 503,
-		"note", "siteRoot is 503 while no web build is deployed")
+		"api", "/api/health", "root", "/health", "siteRoot", siteRootStatus(cfg.Env.WebRoot),
+		"note", "siteRoot is 503 only while no web build is deployed")
 
 	return app
+}
+
+// siteRootStatus reports what "/" will answer.
+//
+// 200 once a web build is served, 503 while none is -- the no-web-build page is
+// deliberately a failure signal, since a missing frontend is a real fault.
+//
+// Derived rather than hardcoded because it flips when the SPA ships. This line
+// exists to be compared against the platform's health check setting, so a stale
+// value would be worse than no line at all.
+func siteRootStatus(webRoot string) int {
+	if webRoot != "" {
+		return fiber.StatusOK
+	}
+	return fiber.StatusServiceUnavailable
 }
 
 // errorHandler renders every error in the shape the client expects.

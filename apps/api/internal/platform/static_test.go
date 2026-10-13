@@ -180,6 +180,55 @@ func readBody(t *testing.T, res *http.Response) string {
 	return string(b)
 }
 
+// newTestApp builds a Fiber app with the static handling platform.New applies,
+// without the full dependency graph. An empty webRoot exercises the no-web-build
+// path.
+func newTestApp(t *testing.T, webRoot string) *fiber.App {
+	t.Helper()
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	if webRoot != "" {
+		app.Use(spaHandler(webRoot, testLogger()))
+	} else {
+		app.Use(noWebBuild(testLogger(), nil))
+	}
+	return app
+}
+
+// --- the boot line must not lie about the site root ---------------------------
+
+// The boot log names what a health probe can be pointed at. It said
+// "siteRoot=503" unconditionally, which was correct only while no web build was
+// deployed -- so shipping the SPA turned the line into a false statement on a
+// healthy service, which is the worst thing that line could do.
+func TestSiteRootStatusReflectsWhetherAWebBuildExists(t *testing.T) {
+	if got := siteRootStatus("public"); got != 200 {
+		t.Errorf("site root with a web build = %d, want 200", got)
+	}
+
+	if got := siteRootStatus(""); got != 503 {
+		t.Errorf("site root without a web build = %d, want 503", got)
+	}
+}
+
+// A client route resolves to index.html, while a missing asset with an extension
+// stays a 404. Getting this backwards is the bug the extension check exists for.
+func TestSPAHandlerAndRootStatusAgree(t *testing.T) {
+	root := t.TempDir()
+	writeIndex(t, root)
+
+	app := newTestApp(t, root)
+	for path, want := range map[string]int{
+		"/":             200,
+		"/marketplaces": 200,
+		"/api/health":   404, // unregistered here; the real app registers it
+		"/missing.js":   404,
+	} {
+		if res := doRequest(t, app, path); res.StatusCode != want {
+			t.Errorf("%s = %d, want %d", path, res.StatusCode, want)
+		}
+	}
+}
+
 // --- probe logging: making an aborted deploy diagnosable ----------------------
 
 // capturedLogger keeps log lines so a test can assert on what was recorded.
