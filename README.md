@@ -275,33 +275,15 @@ fails closed: a route is gated unless it carries `meta.public`.
 ## Deployment
 
 The target is **Voroa** (getvoroa.com) — a GitHub-native PaaS that builds this
-repository, runs it in a container in India, and terminates HTTPS in front of it.
-Deploys through a Dockerfile, because the service is two toolchains: `node:22`
-builds the SPA and `golang:1.26` builds the API. Voroa's automatic path detects
-`apps/api/go.mod`, concludes "Go service", and provisions Go alone — no Node, no
-pnpm — which fails with `pnpm: command not found`. The base image pins both
-versions, and also removes the per-deploy `go: downloading go1.26.5`.
+repository into a container in India and terminates HTTPS in front of it.
 
-- **Root directory**: `/` (the repository root). The build context must contain
-  the workspace manifest and `packages/shared`, both outside `apps/api`.
-- **Runtime**: Docker (Dockerfile).
-- **Dockerfile path**: `/apps/api/Dockerfile` — fixed at creation, so it must be
-  right the first time.
-- **Build command**, **Start command**: leave empty. The image's `CMD` runs the
-  binary, and Voroa ignores both for a Docker runtime.
+Deploys go through `apps/api/Dockerfile`: a `node:22` stage builds the SPA, a
+`golang:1.26` stage builds the API, and a slim runtime carries both. Voroa's
+automatic build cannot do this — pointed at `apps/api` it sees `go.mod`, concludes
+"Go service", and provisions Go alone, with no Node and no pnpm.
 
-Readiness comes from the image's `HEALTHCHECK`, not from a dashboard setting:
-Voroa ignores Health Check Path for Docker runtimes. Ours runs
-`bin/api -healthcheck`, which requests `/api/health` and fails when the database
-is unreachable.
-
-`PORT` is supplied by the platform and read by the binary; nothing is hardcoded.
-`sqlc` is not run on the platform — the generated code is committed. TLS
-termination is the platform's job.
-
-Env vars, domain and the Google redirect URI are set on the service itself.
-
-**[docs/DEPLOY-VOROA.md](docs/DEPLOY-VOROA.md) is the runbook**: database creation
-or import, service settings, environment variables, Google sign-in, the one-command
-adoption of an existing database (`migrate force 1`), redeploying, and what to check
-when a deploy goes wrong.
+**[docs/DEPLOY-VOROA.md](docs/DEPLOY-VOROA.md) is the runbook**, and it is the only
+place the dashboard settings are written down: the service settings, environment
+variables, database creation or import, Google sign-in, and how to read the
+deploy log. Settings are deliberately not duplicated here, because two copies of
+a configuration that has to be right on the first try will eventually disagree.

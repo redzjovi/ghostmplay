@@ -130,65 +130,18 @@ then delete it.
 
 ## 4. Health check
 
-**Under the Docker runtime this field is ignored.** Readiness comes from the
-image's `HEALTHCHECK`, which the Dockerfile provides. See step 3.
+**There is nothing to set.** Under the Docker runtime Voroa ignores the Health
+Check Path entirely, because it cannot assume anything is present inside an image
+it did not build. Readiness comes from the `HEALTHCHECK` in the Dockerfile, which
+runs `/app/bin/api -healthcheck`.
 
-The rest of this section applies only if you deploy without Docker, where
-setting it correctly does matter.
+That check requests `/api/health` and exits non-zero when the database is
+unreachable, so a service that started but cannot do its job is reported as
+failed rather than live. See step 3.
 
-Set the **Health Check Path** to `/api/health`.
-
-**Do not set it to `/`.** That is the single most common way this deploy fails,
-and it fails in a way that looks like the application is broken. With no web
-build beside the binary, `/` answers **503** with a diagnostic page explaining
-exactly that; the platform reads a non-200 on `/` as an unhealthy service and
-aborts the deploy, even though the API is running perfectly. The log line
-`Deploy aborted - your service did not pass its health check` is what this
-produces.
-
-`/health` is also registered and is equally valid. Both are ungated and answer
-503 when the database is unreachable — deliberate, so Voroa reports the service
-as failed rather than live when the app cannot actually do its job, instead of
-reporting a green process that 502s on every request.
-
-If you build the web app as well (step 6), `/` serves the SPA and can be used,
-but point the check at `/api/health` anyway: it tests the API without depending
-on the frontend being deployed.
-
-**Check this field before anything else when a deploy aborts.** The cost of
-getting it wrong is high and the fix is instant. A probe on `/` with no web
-build does not fail fast — Voroa waits out the entire startup window before
-giving up, so the deploy spends a couple of minutes doing nothing before
-reporting the same error either way. In the log it looks like this:
-
-```
-migrations up to date
-listening ... port=3000       ← healthy, 157ms later
-...                           ← two minutes of serving requests, then:
-Deploy aborted - your service did not pass its health check.
-```
-
-The service was never broken. It was answering 503 on the one path that is
-meant to refuse, and the platform believed it.
-
-### Reading the probe log
-
-A health probe never reaches a route that used to log anything, so an abort left
-no record of what was actually asked. It is now logged, which makes the cause
-readable from the deploy log instead of inferred:
-
-| Log line | What it means |
-|---|---|
-| `health checks answer on these paths api=/api/health root=/health siteRoot=503` | Printed at boot. Compare against the setting above. |
-| `served the no-web-build page at the site root ... status=503` | The probe hit `/`. Point the health check at `/api/health`. |
-| `no route matched and there is no web build to fall back to ... status=404` | The probe hit a path this service does not serve — a typo, or a trailing slash. |
-| `health check reporting unhealthy: database unreachable` | The probe hit a health path and the database was genuinely down. |
-
-**If an aborted deploy contains none of these**, the probe never reached the
-process at all, which points at the port or at routing rather than the path.
-
-`/health` and `/api/health` both answer 200 whenever the database is reachable,
-so either is a valid setting.
+The probe log lines the API emits at boot -- `health checks answer on these paths`
+and, when there is no web build, one line per probe -- are still worth reading
+when a deploy aborts.
 
 ## 5. Environment variables
 
@@ -208,11 +161,6 @@ never shown back.
 
 `PORT` is assigned by the platform and read automatically; do not set it. The
 process binds `0.0.0.0`, which is what the platform's router requires.
-
-`WEB_ROOT` is only needed if you serve the SPA from a different origin than the
-API. The recommended setup is a single origin, in which case it is unset and the
-built `public/` beside the binary is found automatically — but only if you also
-build the web app. See the next step.
 
 ## 6. Serving the web app
 
@@ -261,9 +209,21 @@ than the existence of a file.
 
 ## 7. First deploy
 
-Press Deploy. Watch the deploy log. The build is one `go build`. Then the
-service starts and, unless `MIGRATIONS_RUN=false`, applies any pending
-migration.
+Press Deploy. Watch the deploy log. The build is the image from step 3: a Node
+stage that installs the workspace and builds the SPA, a Go stage that compiles
+the binary, and a runtime stage carrying both. Then the service starts and,
+unless `MIGRATIONS_RUN=false`, applies any pending migration.
+
+A clean build takes a few minutes the first time, most of it pulling the
+`node:22` and `golang:1.26` images. The SPA stage alone is around 50s, and the
+resulting image is about 100MB. Afterwards the manifest layers are cached, so a
+change to one `.go` or one `.vue` file rebuilds only what that change touched.
+
+**A failed health check costs more than it looks.** Voroa counts the whole
+startup window towards your build minutes and holds a build slot while it waits,
+so a probe that never passes is billed twice -- once waiting, once when you
+redeploy. This service boots in about 150ms, so the default window is generous;
+raising it makes failures slower, not faster.
 
 If the deploy fails:
 
@@ -273,56 +233,12 @@ If the deploy fails:
 | `Your base image requires...` / `COPY failed: no such file` | Root directory is not the repository root, so the context lacks the workspace manifest | Same as above. |
 | `failed to start`, nothing listening | `DATABASE_URL` wrong, or a crash on boot | The runtime log has the reason. A bad database fails the boot ping before anything listens. |
 | `Deploy aborted...` and the container is `unhealthy` | The image's `HEALTHCHECK` failed — usually the database | `docker logs` on the equivalent local build shows why; the same `error` field appears at runtime. |
-| Live but every request 502s | The database is unreachable | `curl /api/health`; it returns 503 with `database: down`. |
 | `no web build found; serving the API only` | `/app/public` is missing from the image | The web stage did not run. Check the build log for the `pnpm` step. |
 | Sync fails, log says `cause=upstream` with `upstream_status=400` | The upstream is refusing us, not our bug | Check `market-api.numine.io`; the log carries their error in `upstream_said`. Nothing to fix here. |
 | Sync fails, log says `cause=internal` | Our bug | Read the `error` field. |
 | `/admin/data` 403s | `GOOGLE_ADMIN_EMAILS` is empty | Add the verified address and sign in again. |
 
-## 8. Why a deploy feels slow
-
-Almost always it is not the build, and the log says so. Compare these two lines:
-
-```
-migrations up to date
-listening ... port=3000          ← 384ms later
-```
-
-The service is up almost immediately. If the deploy *still* fails, it spent its
-whole window waiting on a health probe that was never going to pass, and
-`Deploy aborted` arrives minutes later — which reads like a slow build and is
-actually a slow failure. Check the health check path first; it is the single
-most common cause and costs nothing to verify.
-
-Measured on this repository, for scale:
-
-| Stage | Time |
-|---|---|
-| `go build` (cold, no cache) | 23s |
-| `go build` (warm) | 2s |
-| Module download | reused while `go.sum` is unchanged |
-| Boot to listening | under 0.5s |
-
-To keep it that way:
-
-- **Keep the build command to one `go build`.** Running the test suite in the
-  build step roughly doubles the minutes each deploy costs, and the suite is
-  already run before anything is pushed.
-- **Commit `go.sum`.** Voroa reuses installed dependencies while the lockfile is
-  unchanged; a missing or frequently-edited lockfile reinstalls them every
-  deploy. It is committed.
-- **Add build filters** under Build & Deploy so that editing this file, or a
-  README, does not trigger a full build of a Go service.
-- **Leave the binary unstripped for now.** `-ldflags="-s -w"` would take it from
-  22M to 16M, which saves well under a second against a 23s compile. Only worth
-  it if the build stops being the bottleneck.
-
-There is no build-cache setting exposed for the standard runtime. If the build
-ever does become the bottleneck, the escape hatch is the Docker runtime with
-`RUN --mount=type=cache,target=/root/.cache/go-build`, which turns a 23s cold
-build into 2s — a larger change than it is worth for a service this size.
-
-## 9. Adopting an existing database
+## 8. Adopting an existing database
 
 If you imported the cPanel database (option A), that database already has the
 schema and will also carry TypeORM's own bookkeeping. The baseline migration
@@ -343,14 +259,14 @@ TypeORM chain, one through the baseline — and diffs them.
 If you have `migrate` installed locally you can run it from `apps/api` with
 `make migrate-force VERSION=1`.
 
-## 10. Redeploying
+## 9. Redeploying
 
 Push to the deployment branch. Auto-deploy (on by default) builds and swaps.
 A failed build or a crash keeps the previous version serving.
 
 For a manual redeploy, use the Deploy button in the dashboard.
 
-## 11. Things that are specific to this app
+## 10. Things that are specific to this app
 
 ### One process
 
