@@ -10,6 +10,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/redzjovi/ghostmplay/apps/api/internal/modules/marketplace/api"
 )
 
 // Retry classification for scraper work.
@@ -177,4 +179,48 @@ func withRetry(ctx context.Context, label string, log *slog.Logger, fn func() er
 	}
 
 	return lastErr
+}
+
+// upstreamFault is what an upstream said when it refused.
+//
+// The upstream is a third party serving a public endpoint from behind its own
+// database, and when its database is unreachable it answers HTTP 400 with the
+// database error in the body. That makes "our bug" and "their outage" produce
+// the same log line unless something surfaces the distinction, and when it is
+// their outage the only evidence available is what we logged.
+type upstreamFault struct {
+	// Status is the HTTP status returned.
+	Status int
+	// Op is the operation: the upstream's path, without the query string.
+	Op string
+	// Message is what the upstream said, whitespace-collapsed. For an upstream
+	// fault this is the part that identifies it.
+	Message string
+}
+
+// upstreamCause extracts an upstream refusal from an error chain.
+//
+// The error is wrapped on the way out -- "search redis page 0: market/search-redis:
+// upstream returned HTTP 400: ..." -- so the chain is walked rather than only the
+// outermost error inspected.
+func upstreamCause(err error) (upstreamFault, bool) {
+	var httpErr *api.HTTPError
+	if !errors.As(err, &httpErr) {
+		return upstreamFault{}, false
+	}
+	return upstreamFault{
+		Status:  httpErr.Status,
+		Op:      httpErr.Op,
+		Message: summarise(httpErr.Body, 300),
+	}, true
+}
+
+// summarise trims a body to something loggable, collapsing whitespace so a
+// multi-line error page cannot become a multi-line log entry.
+func summarise(body string, max int) string {
+	flat := strings.Join(strings.Fields(body), " ")
+	if len(flat) > max {
+		return flat[:max] + "..."
+	}
+	return flat
 }

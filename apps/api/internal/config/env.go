@@ -36,7 +36,15 @@ type Env struct {
 	// ProxyHeader is the header carrying the real client address.
 	ProxyHeader string
 	CORSOrigins []string
-	WebRoot     string
+
+	// Where the built web app lives, if it has been built. Empty means there is
+	// no frontend, which is a valid mode -- an API-only deployment.
+	WebRoot string
+	// WebRootCandidates are the paths that were tried. Carried so an API-only
+	// deployment can say where it looked, rather than only reporting that it
+	// found nothing -- which is the difference between a five-second diagnosis
+	// and an afternoon.
+	WebRootCandidates []string
 
 	Google Google
 
@@ -98,7 +106,6 @@ func Load() (Env, error) {
 		TrustProxy:  strings.TrimSpace(os.Getenv("TRUST_PROXY")) != "0",
 		ProxyHeader: "X-Forwarded-For",
 		CORSOrigins: splitCSV(os.Getenv("CORS_ORIGINS")),
-		WebRoot:     resolveWebRoot(),
 
 		LogAPI: os.Getenv("LOG_API") == "1",
 
@@ -117,6 +124,7 @@ func Load() (Env, error) {
 		return Env{}, err
 	}
 
+	e.WebRoot, e.WebRootCandidates = resolveWebRoot()
 	e.Google = loadGoogle()
 
 	return e, nil
@@ -162,10 +170,11 @@ func loadGoogle() Google {
 // serve it if you prefer a single origin. Candidates are tried in order and the
 // first that exists wins; an empty result means the API runs without static
 // serving, which is a valid mode.
-func resolveWebRoot() string {
+// resolveWebRoot returns the web build directory and every path it considered.
+func resolveWebRoot() (root string, candidates []string) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return ""
+		return "", nil
 	}
 
 	// A path relative to the executable rather than the working directory. A
@@ -177,23 +186,29 @@ func resolveWebRoot() string {
 		exeDir = filepath.Dir(exe)
 	}
 
-	candidates := []string{
+	// An unset WEB_ROOT is dropped rather than listed: it means "unset", and
+	// naming it would send whoever reads the log looking at a path that does not
+	// exist.
+	raw := []string{
 		os.Getenv("WEB_ROOT"),
 		filepath.Join(cwd, "public"),
 		filepath.Join(exeDir, "public"),
 		filepath.Join(cwd, "apps", "web", "dist"),
 		filepath.Join(cwd, "..", "web", "dist"),
 	}
-
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		if info, err := os.Stat(c); err == nil && info.IsDir() {
-			return c
+	candidates = make([]string, 0, len(raw))
+	for _, c := range raw {
+		if c != "" {
+			candidates = append(candidates, c)
 		}
 	}
-	return ""
+
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			return c, candidates
+		}
+	}
+	return "", candidates
 }
 
 // loadDotEnv reads the nearest .env, walking up from the working directory.

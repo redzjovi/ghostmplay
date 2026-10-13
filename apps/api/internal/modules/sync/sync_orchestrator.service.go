@@ -210,8 +210,27 @@ func (o *Orchestrator) run(ctx context.Context, opts EnqueueOptions, lock common
 	elapsed := time.Since(started)
 
 	if err != nil {
-		o.log.Error("sync failed", "kind", opts.Kind, "mode", opts.Mode,
-			"duration", elapsed.String(), "error", describeError(err))
+		// A failure of the upstream is a different thing from a failure of this
+		// app, and the log line has to say which. During an upstream outage the
+		// only evidence is this line, so it carries the endpoint and whatever the
+		// upstream said rather than only our own summary of it.
+		attrs := []any{
+			"kind", opts.Kind, "mode", opts.Mode,
+			"duration", elapsed.String(),
+		}
+		if up, ok := upstreamCause(err); ok {
+			attrs = append(attrs,
+				"cause", "upstream",
+				"upstream_status", up.Status,
+				"upstream_endpoint", up.Op,
+				"upstream_said", up.Message,
+			)
+		} else {
+			attrs = append(attrs, "cause", "internal")
+		}
+		attrs = append(attrs, "error", describeError(err))
+
+		o.log.Error("sync failed", attrs...)
 		o.finish(ctx, opts.Kind, StatusFailed, nil, describeError(err))
 		return
 	}

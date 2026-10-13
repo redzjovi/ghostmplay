@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/redzjovi/ghostmplay/apps/api/internal/modules/marketplace/api"
@@ -143,4 +144,99 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// --- C1: telling an upstream fault apart from our own -----------------------
+
+// The upstream outage this exists for: market-api answered HTTP 400 carrying its
+// own database error, every route at once, and the sync log said only "sync
+// failed: search redis page 0". Nothing in it distinguished the upstream being
+// broken from this app being broken, which is the distinction that decides
+// whether anyone debugs anything at all.
+func TestUpstreamCauseSurfacesWhatTheUpstreamSaid(t *testing.T) {
+	body := `{"message":"{\"errorCode\":-1,\"message\":\"Error 1045 (28000): ` +
+		`Access denied for user 'mwallet_user'@'119.205.199.92' (using password: YES)\"}","data":null}`
+
+	err := fmt.Errorf("search redis page 0: %w", &api.HTTPError{
+		Status: 400,
+		Op:     "market/search-redis",
+		Body:   body,
+	})
+
+	up, ok := upstreamCause(err)
+	if !ok {
+		t.Fatal("a wrapped upstream refusal was not recognised as one")
+	}
+	if up.Status != 400 {
+		t.Errorf("Status = %d, want 400", up.Status)
+	}
+	if up.Op != "market/search-redis" {
+		t.Errorf("Op = %q, want the upstream path", up.Op)
+	}
+	// The database error is the part that identifies the outage.
+	if want := "Error 1045"; !strings.Contains(up.Message, want) {
+		t.Errorf("Message does not carry the upstream error: %q", up.Message)
+	}
+}
+
+// The error is wrapped on the way out, so only walking the chain finds it.
+func TestUpstreamCauseUnwraps(t *testing.T) {
+	inner := &api.HTTPError{Status: 503, Op: "nft/item-detail", Body: "upstream busy"}
+
+	for depth := 1; depth <= 5; depth++ {
+		err := error(inner)
+		for i := 1; i < depth; i++ {
+			err = fmt.Errorf("item detail page %d: %w", i, err)
+		}
+
+		up, ok := upstreamCause(err)
+		if !ok {
+			t.Fatalf("depth %d: not recognised", depth)
+		}
+		if up.Status != 503 || up.Op != "nft/item-detail" {
+			t.Errorf("depth %d: got %d/%q", depth, up.Status, up.Op)
+		}
+	}
+}
+
+// Our own failures must not be dressed up as upstream ones, or the distinction
+// is worthless.
+func TestUpstreamCauseIgnoresInternalErrors(t *testing.T) {
+	for name, err := range map[string]error{
+		"plain":       errors.New("connection reset by peer"),
+		"timeout":     context.DeadlineExceeded,
+		"wrapped":     fmt.Errorf("run: %w", errors.New("pool exhausted")),
+		"db":          fmt.Errorf("query: %w", errors.New("relation does not exist")),
+		"double wrap": fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", errors.New("boom"))),
+	} {
+		if _, ok := upstreamCause(err); ok {
+			t.Errorf("%s: an internal error was misreported as an upstream fault", name)
+		}
+	}
+}
+
+func TestUpstreamCauseHandlesNil(t *testing.T) {
+	if _, ok := upstreamCause(nil); ok {
+		t.Error("nil was reported as an upstream fault")
+	}
+}
+
+// A long multi-line error page must not become a multi-line log entry.
+func TestSummariseCollapsesAndTruncates(t *testing.T) {
+	got := summarise("line one\n  line two\tthree   four", 100)
+	if want := "line one line two three four"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := summarise("x", 10); got != "x" {
+		t.Errorf("short input was altered: %q", got)
+	}
+	if got := summarise("abcdefghijklmnop", 10); got != "abcdefghij..." {
+		t.Errorf("truncation: got %q", got)
+	}
+}
+
+func TestSummariseEmpty(t *testing.T) {
+	if got := summarise("", 50); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
 }

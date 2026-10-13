@@ -74,6 +74,11 @@ func New(cfg Config) *fiber.App {
 	// Health first and unguarded: a platform probe carries no session and must
 	// not have to acquire one.
 	cfg.Health.Register(apiGroup)
+	// The same handler at the root, for a probe configured without the /api
+	// prefix. A platform reaching for /health and getting a 404 is
+	// indistinguishable from an unhealthy service, and the logs say nothing
+	// about which it was.
+	app.Get("/health", func(c *fiber.Ctx) error { return cfg.Health.Check(c) })
 
 	// Auth. The guards vary per route -- none, optional, optional -- which is why
 	// they sit on the handlers rather than on the group.
@@ -97,9 +102,16 @@ func New(cfg Config) *fiber.App {
 
 	// The SPA last: it has to be a fallback, not a route that shadows the API.
 	if cfg.Env.WebRoot != "" {
+		cfg.Log.Info("serving the web app", "root", cfg.Env.WebRoot)
 		app.Use(spaHandler(cfg.Env.WebRoot, cfg.Log))
 	} else {
-		cfg.Log.Info("no web build found, serving the API only")
+		// Every path this process looked for a frontend. "There is no web build"
+		// and "it is somewhere I did not check" are different problems with
+		// different fixes, and the log should not leave you guessing which.
+		cfg.Log.Warn("no web build found; serving the API only",
+			"lookedIn", cfg.Env.WebRootCandidates,
+			"hint", "build the SPA and set WEB_ROOT, or copy the build to apps/api/public")
+		app.Use(noWebBuild(cfg.Log, cfg.Env.WebRootCandidates))
 	}
 
 	return app

@@ -29,16 +29,111 @@ func spaHandler(root string, log *slog.Logger) fiber.Handler {
 			return fiber.ErrNotFound
 		}
 
-		path, err := safeJoin(root, c.Path())
+		cleaned := filepath.Clean("/" + c.Path())
+
+		path, err := safeJoin(root, cleaned)
 		if err == nil && path != "" && isFile(path) {
 			applyCacheHeaders(c)
 			return c.SendFile(path)
 		}
 
-		// The fallback: every unmatched non-API path is the SPA.
+		// A path with a file extension is a request for a real asset -- a script,
+		// a stylesheet, an image. Answering index.html for a missing /app.js hands
+		// the browser an HTML document where it expects JavaScript, and the
+		// resulting failure is far harder to trace back than an honest 404.
+		//
+		// It also means a mistyped health-check path returns 404 rather than 200,
+		// so a broken configuration cannot be mistaken for a healthy service.
+		if filepath.Ext(cleaned) != "" {
+			return fiber.ErrNotFound
+		}
+
+		// The fallback: every other unmatched path is the SPA.
 		applyCacheHeaders(c)
 		return c.SendFile(indexPath)
 	}
+}
+
+// noWebBuild answers requests when there is no SPA to serve.
+//
+// This exists because its absence cost a deploy. With no web build the process
+// registered no static handler at all, so "/" returned a bare 404 and a platform
+// probing the site root concluded the service was unhealthy -- with nothing in
+// the logs but one INFO line naming the cause, and no indication of where the
+// build was expected.
+//
+// Only the site root produces this page. A request for a real API route still
+// gets its real 404, so a wrong base URL cannot be mistaken for a healthy
+// service either.
+func noWebBuild(log *slog.Logger, candidates []string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if strings.HasPrefix(c.Path(), "/api/") {
+			return fiber.ErrNotFound
+		}
+		if c.Path() != "/" {
+			return fiber.ErrNotFound
+		}
+
+		c.Set(fiber.HeaderContentType, fiber.MIMETextHTMLCharsetUTF8)
+		c.Set(fiber.HeaderCacheControl, "no-store")
+		return c.Status(fiber.StatusServiceUnavailable).SendString(missingWebBuildPage(candidates))
+	}
+}
+
+// missingWebBuildPage renders the diagnostic.
+//
+// 503 rather than 200: the API is genuinely serving, but the service is not
+// whole, and a page that reported success would be read as "everything is fine".
+func missingWebBuildPage(candidates []string) string {
+	var looked strings.Builder
+	if len(candidates) > 0 {
+		looked.WriteString("\n      <h2>Where it looked</h2>\n      <ul>\n")
+		for _, p := range candidates {
+			looked.WriteString("        <li><code>" + htmlEscape(p) + "</code></li>\n")
+		}
+		looked.WriteString("      </ul>\n")
+	}
+
+	return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ghostmplay &mdash; web build not deployed</title>
+    <style>
+      body { font: 15px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;
+             margin: 0 auto; max-width: 44rem; padding: 3rem 1.25rem; color: #1b1b1b; }
+      h1 { font-size: 1.25rem; line-height: 1.4; margin: 0 0 1rem; }
+      h2 { font-size: 1rem; margin: 2rem 0 .5rem; }
+      p { margin: .5rem 0; }
+      code { background: #f2f2f2; padding: .1rem .35rem; border-radius: 3px; }
+      ul { padding-left: 1.1rem; } .muted { color: #666; } a { color: #0a5; }
+    </style>
+  </head>
+  <body>
+    <h1>The API is running. The web app was not deployed with it.</h1>
+    <p class="muted">This service was built without a frontend, so there is nothing to
+    serve at <code>/</code>. The API is unaffected and reachable under <code>/api</code>.</p>
+    <h2>To fix it</h2>
+    <p>Build the SPA and make it visible to this process, either by pointing
+    <code>WEB_ROOT</code> at the built directory or by copying the build to
+    <code>apps/api/public</code> before <code>go build</code>. See
+    <code>docs/DEPLOY-VOROA.md</code>, "Serving the web app".</p>
+    <h2>Check the API</h2>
+    <ul>
+      <li><a href="/api/health">/api/health</a></li>
+      <li><a href="/health">/health</a></li>
+      <li><a href="/api/marketplace/items?limit=1">/api/marketplace/items?limit=1</a></li>
+    </ul>` + looked.String() + `
+  </body>
+</html>
+`
+}
+
+func htmlEscape(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;",
+	).Replace(s)
 }
 
 // safeJoin resolves a request path inside root, refusing anything that escapes.
