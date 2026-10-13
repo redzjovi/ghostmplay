@@ -191,6 +191,46 @@ func TestMigrationsRunCanBeDisabled(t *testing.T) {
 	}
 }
 
+// The scheduler runs unless it is explicitly turned off. The default is the part
+// worth pinning: a flag that defaulted to off would silently stop syncing on
+// upgrade for anyone who did not know the variable existed.
+func TestCronIsEnabledByDefault(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://localhost/ghostmplay")
+
+	e, _ := Load()
+	if !e.CronEnabled {
+		t.Error("CronEnabled is false with CRON_ENABLED unset; the scheduler must run by default")
+	}
+}
+
+func TestCronCanBeDisabled(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://localhost/ghostmplay")
+	t.Setenv("CRON_ENABLED", "false")
+
+	e, _ := Load()
+	if e.CronEnabled {
+		t.Error("CronEnabled is true with CRON_ENABLED=false")
+	}
+}
+
+// Only the exact string disables it. A typo must leave the scheduler running
+// rather than silently stop it -- the opposite default would be far worse, but
+// the same principle applies to "falsy-looking" values people actually type.
+func TestCronStaysOnForAnythingOtherThanFalse(t *testing.T) {
+	for _, in := range []string{"", "0", "true", "1", "no", "off", "flase", "FALSE", "False "} {
+		clearEnv(t)
+		t.Setenv("DATABASE_URL", "postgres://localhost/ghostmplay")
+		t.Setenv("CRON_ENABLED", in)
+
+		e, _ := Load()
+		if !e.CronEnabled {
+			t.Errorf("CRON_ENABLED=%q disabled the scheduler; only the exact string \"false\" should", in)
+		}
+	}
+}
+
 func TestSplitCSV(t *testing.T) {
 	tests := []struct {
 		in   string

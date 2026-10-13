@@ -51,6 +51,16 @@ type Env struct {
 	LogAPI        bool
 	LogQuery      bool
 	MigrationsRun bool
+
+	// CronEnabled gates the background scheduler, which is the only thing that
+	// syncs data automatically. Turning it off makes this process API-only;
+	// syncs then happen only when requested through the admin panel.
+	//
+	// Opt-out rather than opt-in, deliberately. A flag defaulting to off would
+	// silently stop syncing on upgrade for anyone who does not know the variable
+	// exists, which is a much worse failure than a scheduler running when someone
+	// expected it stopped.
+	CronEnabled bool
 }
 
 // Google holds the sign-in configuration.
@@ -117,6 +127,11 @@ func Load() (Env, error) {
 		// whole class of deploy bug where a schema change ships without the
 		// migration carrying it.
 		MigrationsRun: os.Getenv("MIGRATIONS_RUN") != "false",
+
+		// The scheduler runs unless it is explicitly turned off. Only the exact
+		// string "false" disables it, matching MIGRATIONS_RUN, so a typo like
+		// "flase" leaves the scheduler running rather than silently stopping it.
+		CronEnabled: os.Getenv("CRON_ENABLED") != "false",
 	}
 
 	var err error

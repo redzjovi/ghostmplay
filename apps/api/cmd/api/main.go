@@ -160,10 +160,25 @@ func wire(env config.Env, log *slog.Logger, queries dbgen.Querier, txManager dat
 		Sync:        sync.NewController(orchestrator),
 	})
 
-	scheduler := sync.NewScheduler(orchestrator, log)
-	stopScheduler, err := sync.StartScheduler(scheduler, log)
-	if err != nil {
-		return nil, nil, fmt.Errorf("start sync scheduler: %w", err)
+	// A no-op rather than nil, and not merely for tidiness: main defers
+	// stopBackground() unconditionally, so returning nil here would panic on
+	// shutdown instead of starting. A flag that turns work off must not turn a
+	// clean stop into a crash.
+	stopScheduler := func() {}
+
+	if env.CronEnabled {
+		scheduler := sync.NewScheduler(orchestrator, log)
+		var err error
+		stopScheduler, err = sync.StartScheduler(scheduler, log)
+		if err != nil {
+			return nil, nil, fmt.Errorf("start sync scheduler: %w", err)
+		}
+	} else {
+		// Logged rather than left silent. Nothing here starts a timer, and an
+		// absent "sync scheduler started" line is otherwise indistinguishable
+		// from a scheduler that failed to start.
+		log.Info("sync scheduler disabled", "enabledBy", "CRON_ENABLED",
+			"consequence", "data is synced only on request from the admin panel")
 	}
 
 	return app, stopScheduler, nil

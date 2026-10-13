@@ -136,6 +136,7 @@ never shown back.
 | `GOOGLE_REDIRECT_URI` | to sign in | `<origin>/api/auth/google/callback` |
 | `GOOGLE_ADMIN_EMAILS` | to have any admin | Verified address, comma-separated. |
 | `MIGRATIONS_RUN` | no | Leave unset so migrations run on boot. |
+| `CRON_ENABLED` | no | Leave unset so the scheduler syncs every minute. `false` makes the deployment API-only — nothing syncs on a timer, only on request from the admin panel. |
 
 `PORT` is assigned by the platform and read automatically; do not set it. The
 process binds `0.0.0.0`, which is what the platform's router requires.
