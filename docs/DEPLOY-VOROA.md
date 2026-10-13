@@ -75,10 +75,22 @@ run `make generate` locally and commit the result.
 
 Set the **Health Check Path** to `/api/health`.
 
-This path is ungated and answers 503 when the database is unreachable. That is
-deliberate: it means Voroa reports the service as failed rather than live when
-the app cannot actually do its job, instead of reporting a green process that
-502s on every request.
+**Do not set it to `/`.** That is the single most common way this deploy fails,
+and it fails in a way that looks like the application is broken. With no web
+build beside the binary, `/` answers **503** with a diagnostic page explaining
+exactly that; the platform reads a non-200 on `/` as an unhealthy service and
+aborts the deploy, even though the API is running perfectly. The log line
+`Deploy aborted - your service did not pass its health check` is what this
+produces.
+
+`/health` is also registered and is equally valid. Both are ungated and answer
+503 when the database is unreachable — deliberate, so Voroa reports the service
+as failed rather than live when the app cannot actually do its job, instead of
+reporting a green process that 502s on every request.
+
+If you build the web app as well (step 6), `/` serves the SPA and can be used,
+but point the check at `/api/health` anyway: it tests the API without depending
+on the frontend being deployed.
 
 ## 5. Environment variables
 
@@ -105,25 +117,39 @@ build the web app. See the next step.
 
 ## 6. Serving the web app from the same service (recommended)
 
-The API serves the SPA when a build is present beside it. To include it, the
-build command needs to build the web app first and the web app needs its shared
-types.
+The API serves the SPA when a build is present beside the binary. Without one it
+runs API-only, which is a valid mode — but then step 4's health check is the
+only thing standing between you and the 503 abort above.
 
-The cleanest way to keep this simple is to build the web app separately and have
-Voroa serve it, OR to widen the build command. Because the web app is a pnpm
-project and the API is a Go module in the same repository, the practical options
-are:
+**Use one service.** It keeps the session cookie first-party, so `SameSite=Strict`
+still works and sign-in needs no CORS exceptions. Set the **Build Command** to:
 
-- **Two services** (a web service for the Go API and a static site for the
-  built SPA). Clean separation, but two deploys to keep in step, and the session
-  cookie needs `SameSite=None; Secure` because the SPA is then cross-origin.
-- **One service**, with a build command that builds both and copies the web
-  output next to the binary. This is what the local `release` path used to
-  produce, and it keeps the cookie first-party.
+```bash
+pnpm install --frozen-lockfile && pnpm --filter @ghostmplay/web build \
+  && rm -rf public && cp -r ../../apps/web/dist public \
+  && go build -trimpath -o bin/api ./cmd/api
+```
 
-This document does not prescribe one. The code supports both; the choice is
-operational. Whichever you pick, set the Google redirect URI and the session
-cookie policy to match.
+That installs the workspace (the SPA needs `packages/shared` types, which live
+in this repository), builds the SPA, copies the output to `public/` — which is
+the first path the API checks — and only then builds the binary. Keep the start
+command as it is.
+
+The paths are relative to the build root, `apps/api`, so the SPA output is two
+levels up. Get that wrong and `cp` fails; that is fine, but note it is the
+easiest thing to get wrong here, and a failing build is a much clearer signal
+than the 503 below.
+
+This needs Node and pnpm in the build image. If Voroa's Go build image has
+neither, use the two-service option below rather than trying to install a
+toolchain in a build step.
+
+**Two services**, if the build image cannot build the SPA: deploy a separate
+static site for `apps/web/dist`. Two deploys to keep in step, and because the
+origins differ the session cookie needs `SameSite=None; Secure` plus a
+corresponding `CORS_ORIGINS` entry. Set the Google redirect URI to match.
+
+Whichever you pick, set the Google redirect URI and the cookie policy to match.
 
 ## 7. First deploy
 
@@ -139,6 +165,10 @@ If the deploy fails:
 | "build failed" at `go build` | A compile error, or the module was not committed | Read the build log; `make check` locally. |
 | "failed to start", nothing listening | Wrong start command, or a crash on boot | The runtime log has the reason. Check `DATABASE_URL` first — a wrong one fails the boot ping. |
 | Live but every request 502s | The database is unreachable | `curl /api/health`; it returns 503 with `database: down`. |
+| `Deploy aborted - your service did not pass its health check`, but `/api/health` is 200 | The check points at `/` and no web build is deployed | Point the check at `/api/health`. See step 4. |
+| `no web build found; serving the API only` | The build command did not produce `apps/api/public` | Add the SPA build to the build command, see step 6. The log lists every path searched. |
+| Sync fails, log says `cause=upstream` with `upstream_status=400` | The upstream is refusing us, not our bug | Check `market-api.numine.io`; the log carries their error in `upstream_said`. Nothing to fix here. |
+| Sync fails, log says `cause=internal` | Our bug | Read the `error` field. |
 | `/admin/data` 403s | `GOOGLE_ADMIN_EMAILS` is empty | Add the verified address and sign in again. |
 
 ## 8. Adopting an existing database
