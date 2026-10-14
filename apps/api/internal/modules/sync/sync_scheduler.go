@@ -214,6 +214,26 @@ const (
 	PendingInterval         = 24 * time.Hour
 )
 
+// SweepSchedule is how often a row claiming a run this process is not making is
+// reaped.
+//
+// The same interval as the scrape, which is a coincidence of intent rather than
+// convenience: the thing being swept is what the scrape writes and fails to
+// clear, so looking for it at the scrape's cadence costs one extra two-row
+// query a minute and finds a failure within a minute of it happening.
+const SweepSchedule = "@every 1m"
+
+// ReleaseOrphanedRuns is the scheduler's entry point for the sweep.
+//
+// Like RunPendingIfDue it does not wait for anything -- there is no run to wait
+// for by definition -- and a failure is logged rather than returned, because a
+// cron job that cannot report is still better than one that stops.
+func (s *Scheduler) ReleaseOrphanedRuns(ctx context.Context) {
+	if _, err := s.orchestrator.ReleaseOrphanedRuns(ctx); err != nil {
+		s.log.Error("stranded sync sweep failed", "error", describeError(err))
+	}
+}
+
 // RunPendingIfDue starts a history pending re-check when one is due.
 //
 // "Due" is a function of the watermark, not of the clock, so this is safe to call

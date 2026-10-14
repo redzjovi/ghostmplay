@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +75,43 @@ func swapDatabase(rawURL, name string) string {
 	return rawURL[:i+1] + name + rawURL[i+1+j:]
 }
 
+// latestMigrationVersion is the version the schema should be at once every
+// migration has run.
+//
+// Read off the embedded files rather than restated here, because this is the
+// number that changes and the one a test is least able to reason about on its own.
+// Only .up.sql files count: a down migration moves the schema backwards and
+// golang-migrate still records the version of the pair.
+func latestMigrationVersion(t *testing.T) uint {
+	t.Helper()
+
+	entries, err := fs.Glob(db.Migrations, "migrations/*.up.sql")
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no migrations found in the embedded filesystem")
+	}
+
+	var latest uint
+	for _, name := range entries {
+		// "migrations/000002_last_pending_at.up.sql" -> 2
+		base := path.Base(name)
+		digits := strings.TrimLeft(base, "0123456789")
+		if digits == base {
+			t.Fatalf("migration %q does not start with a version number", base)
+		}
+		n, err := strconv.ParseUint(base[:len(base)-len(digits)], 10, 32)
+		if err != nil {
+			t.Fatalf("parse version from %q: %v", base, err)
+		}
+		if uint(n) > latest {
+			latest = uint(n)
+		}
+	}
+	return latest
+}
+
 func TestMigrateCreatesTheSchema(t *testing.T) {
 	adminURL := testDB(t)
 	url := scratchDatabase(t, adminURL)
@@ -90,8 +130,12 @@ func TestMigrateCreatesTheSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("schema version = %d, want 1", version)
+	// Derived from the migration files rather than written down. A hardcoded
+	// number here went stale the moment a second migration was added, and because
+	// these tests only run when GHOSTMPLAY_TEST_DATABASE_URL is set, it sat wrong
+	// and unrun at the same time.
+	if want := int(latestMigrationVersion(t)); version != want {
+		t.Errorf("schema version = %d, want %d", version, want)
 	}
 	if dirty {
 		t.Error("schema is dirty; a migration did not finish")

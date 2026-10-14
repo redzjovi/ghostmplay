@@ -24,6 +24,7 @@
     "typecheck": "pnpm --filter @ghostmplay/shared typecheck && pnpm --filter @ghostmplay/web typecheck",
     "lint": "pnpm --filter @ghostmplay/shared lint && pnpm --filter @ghostmplay/web lint && make -C apps/api lint",
     "test": "make -C apps/api test && pnpm test:web",
+    "test:db": "make -C apps/api test-db",
     "test:web": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

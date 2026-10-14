@@ -80,6 +80,19 @@
           <span class="text-xs text-muted-foreground">
             <template v-if="deduped[kind]">Joined the run already in progress.</template>
           </span>
+          <!-- The one control on this card that ignores `running`, and deliberately
+               so: `isBusy` is disabled by exactly the stuck state this releases, so
+               gating it there would make it unreachable on the only card that needs
+               it. A genuine run is refused server-side with a 409. -->
+          <Button
+            v-if="shouldOfferReset(byKind[kind])"
+            variant="outline"
+            :disabled="resettingNow || clearingNow"
+            @click="askReset(kind)"
+          >
+            <Loader2 v-if="resettingNow" class="mr-2 h-4 w-4 animate-spin" />
+            Reset stuck
+          </Button>
           <Button
             variant="destructive"
             class="ml-auto"
@@ -117,6 +130,34 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <!-- Its own dialog rather than a branch of the clear one: the two say
+         completely different things afterwards, and reusing the node would mean
+         the delete's "this cannot be undone" copy could ever render next to a
+         reset that deletes nothing. -->
+    <Dialog :open="resetting !== null" @update:open="onResetDialogChange">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            Release the {{ resetting ? KIND_TITLES[resetting] : '' }} run the server still thinks is going?
+          </DialogTitle>
+          <DialogDescription>{{ resetting ? RESET_WARNINGS[resetting] : '' }}</DialogDescription>
+        </DialogHeader>
+        <p v-if="resetDone" class="text-sm font-medium">{{ resetDone }}</p>
+        <DialogFooter>
+          <Button variant="outline" @click="resetting = null">
+            {{ resetDone ? 'Close' : 'Cancel' }}
+          </Button>
+          <Button
+            :disabled="resetting === null || resettingNow || resetDone !== null"
+            @click="confirmReset"
+          >
+            <Loader2 v-if="resettingNow" class="mr-2 h-4 w-4 animate-spin" />
+            Release it
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -143,6 +184,7 @@ import {
   PENDING_MODE,
   backfillMode,
   modeLabel,
+  shouldOfferReset,
   statOf,
   statusLabel,
 } from '@/lib/syncPanel'
@@ -289,6 +331,58 @@ function clearedSummary(res: ClearSyncDataResult | null): string {
   const d = res.deleted as Record<string, number>
   const parts = Object.entries(d).map(([k, v]) => `${v} ${k}`)
   return `Deleted ${parts.join(' and ')}.`
+}
+
+/**
+ * What releasing a stuck run does, said before the click.
+ *
+ * No data goes either way -- the point is the opposite of "clear all", which is
+ * why the two need separate words rather than a shared verb. It also says what
+ * happens if the run is real, because that is the one case where this does
+ * nothing and the admin needs to know that before clicking rather than after.
+ */
+const RESET_WARNINGS: Record<SyncKind, string> = {
+  marketplace:
+    'Marks the run as interrupted and re-enables the controls. No listings are deleted — this only clears the stuck status. If the scrape really is running, the server refuses and nothing changes.',
+  history:
+    'Marks the run as interrupted and re-enables the controls. No transfers are deleted — this only clears the stuck status. If the scrape really is running, the server refuses and nothing changes.',
+}
+
+// Which kind the reset dialog is open for; null when closed. Doubles as the
+// "a reset is in flight" marker, so the button's own disabled state does not
+// need a second variable.
+const resetting = ref<SyncKind | null>(null)
+const resettingNow = ref(false)
+// What the last reset actually did. "Nothing was stuck" is reported rather than
+// treated as a no-op: the button is one press away from being wrong about why it
+// was on screen, and a silent close would read as a success.
+const resetDone = ref<string | null>(null)
+
+function askReset(kind: SyncKind) {
+  deduped.value[kind] = false
+  resetDone.value = null
+  resetting.value = kind
+}
+
+/** Dismissed by Cancel or by clicking out — never by a successful reset. */
+function onResetDialogChange(open: boolean) {
+  if (!open && !resettingNow.value) resetting.value = null
+}
+
+async function confirmReset(): Promise<void> {
+  const kind = resetting.value
+  if (!kind || resettingNow.value) return
+  resettingNow.value = true
+  try {
+    const res = await sync.reset(kind)
+    resetDone.value = res.reset
+      ? 'The run is no longer marked as going. Start a new one when you want it.'
+      : 'Nothing was stuck — the server had already moved on.'
+  } catch {
+    // Rendered by the alert at the top; leave the dialog open to retry or cancel.
+  } finally {
+    resettingNow.value = false
+  }
 }
 
 onMounted(() => {

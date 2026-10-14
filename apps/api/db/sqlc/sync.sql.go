@@ -8,20 +8,10 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/sqlc-dev/pqtype"
 )
-
-const existsSyncStateForLock = `-- name: ExistsSyncStateForLock :one
-SELECT EXISTS(SELECT 1 FROM sync_state WHERE kind = $1 AND running_since IS NOT NULL)
-`
-
-func (q *Queries) ExistsSyncStateForLock(ctx context.Context, kind string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, existsSyncStateForLock, kind)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
 
 const getSyncState = `-- name: GetSyncState :one
 
@@ -143,6 +133,44 @@ func (q *Queries) MarkStrandedSyncsInterrupted(ctx context.Context) ([]string, e
 	return items, nil
 }
 
+const releaseStrandedSync = `-- name: ReleaseStrandedSync :one
+UPDATE sync_state
+SET running_since = NULL,
+    last_finished_at = now(),
+    last_status = 'interrupted',
+    last_error = $1
+WHERE kind = $2::text
+  AND running_since IS NOT NULL
+RETURNING kind
+`
+
+type ReleaseStrandedSyncParams struct {
+	LastError sql.NullString `json:"last_error"`
+	Kind      string         `json:"kind"`
+}
+
+// Releasing one kind's stranded row.
+//
+// The non-destructive counterpart to the boot sweep: same three columns written,
+// no data touched, so it is safe to point at a kind whose run is merely unknown
+// rather than dead. It backs both the admin reset endpoint and the periodic
+// sweeper, which is why it is per-kind -- the boot sweep above is unconditional
+// and can only run when no run of any kind is in flight.
+//
+// `AND running_since IS NOT NULL` is the whole design. It makes the query a
+// no-op when the kind is not stuck, so "nothing to release" is answered by zero
+// rows rather than by the caller having to check first, and it makes the write
+// safe against the race the callers have anyway: a row can go from stuck to
+// genuinely running between the caller's read and this statement. RETURNING
+// because that distinction is the answer -- a row comes back only if there was
+// something to release.
+func (q *Queries) ReleaseStrandedSync(ctx context.Context, arg ReleaseStrandedSyncParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, releaseStrandedSync, arg.LastError, arg.Kind)
+	var kind string
+	err := row.Scan(&kind)
+	return kind, err
+}
+
 const resetSyncState = `-- name: ResetSyncState :exec
 UPDATE sync_state
 SET running_since = NULL,
@@ -167,12 +195,19 @@ INSERT INTO sync_state (
   kind, running_since, last_finished_at, last_pending_at,
   last_status, last_stats, last_error
 )
-VALUES ($1, NULL, $2, CASE WHEN $6::text = 'pending' THEN $2 END, $3, $4, $5)
+SELECT $1,
+       NULL,
+       f.finished_at,
+       CASE WHEN $2::text = 'pending' THEN f.finished_at END,
+       $3,
+       $4,
+       $5
+FROM (SELECT $6::timestamptz AS finished_at) f
 ON CONFLICT (kind) DO UPDATE SET
   running_since = NULL,
   last_finished_at = EXCLUDED.last_finished_at,
   last_pending_at = CASE
-    WHEN $6::text = 'pending' THEN EXCLUDED.last_finished_at
+    WHEN $2::text = 'pending' THEN EXCLUDED.last_finished_at
     ELSE sync_state.last_pending_at
   END,
   last_status = EXCLUDED.last_status,
@@ -182,11 +217,11 @@ ON CONFLICT (kind) DO UPDATE SET
 
 type UpsertSyncRunFinishedParams struct {
 	Kind           string                `json:"kind"`
-	LastFinishedAt sql.NullTime          `json:"last_finished_at"`
+	Mode           string                `json:"mode"`
 	LastStatus     sql.NullString        `json:"last_status"`
 	LastStats      pqtype.NullRawMessage `json:"last_stats"`
 	LastError      sql.NullString        `json:"last_error"`
-	Mode           string                `json:"mode"`
+	LastFinishedAt time.Time             `json:"last_finished_at"`
 }
 
 // mode is left out of the column list and so takes its default. The row records
@@ -203,14 +238,27 @@ type UpsertSyncRunFinishedParams struct {
 // Stamped on failure too -- the point is "when did we last try", and a permanently
 // failing job re-trying every few minutes would hammer an upstream where every
 // request costs real capacity.
+//
+// The timestamp is named once and referenced through a subquery, rather than
+// written twice as $2. That is not a style preference. A parameter that appears
+// twice in one statement has to deduce the same type in both places, and Postgres
+// does not: bare in the last_finished_at position it deduces from the target
+// column, but inside the CASE there is no target column for the parser to resolve
+// against, so it deduces something else and rejects the whole statement at parse
+// time with "inconsistent types deduced for parameter $2" (SQLSTATE 42P08). The
+// failure is total rather than intermittent, and invisible to the test suite
+// because fakeQuerier never executes SQL -- so every run finished without clearing
+// running_since and left the kind permanently marked as running. One occurrence,
+// cast once, is not deducible two ways. See internal/database/queries_test.go,
+// which runs the real statements against a real database for exactly this reason.
 func (q *Queries) UpsertSyncRunFinished(ctx context.Context, arg UpsertSyncRunFinishedParams) error {
 	_, err := q.db.ExecContext(ctx, upsertSyncRunFinished,
 		arg.Kind,
-		arg.LastFinishedAt,
+		arg.Mode,
 		arg.LastStatus,
 		arg.LastStats,
 		arg.LastError,
-		arg.Mode,
+		arg.LastFinishedAt,
 	)
 	return err
 }

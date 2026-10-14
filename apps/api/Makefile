@@ -61,6 +61,24 @@ tidy:
 test:
 	go test $(PKG)
 
+# The tests that need a real PostgreSQL.
+#
+# Separate from `check` on purpose: `check` is what CI runs and what everyone
+# runs, and a hard dependency on a running database would make it fail on any
+# machine that has not started one. The tests skip themselves when
+# GHOSTMPLAY_TEST_DATABASE_URL is unset, so nothing breaks either way -- but they
+# only say anything when it is set, which is the gap this target closes.
+#
+# Each test makes a scratch database, migrates it and drops it, so the variable
+# only has to point at a server whose user may CREATE DATABASE. It defaults to
+# DATABASE_URL, which is what makes `pnpm db:up && make test-db` work with no
+# further setup; the application database itself is never touched.
+TEST_DATABASE_URL ?= $(if $(GHOSTMPLAY_TEST_DATABASE_URL),$(GHOSTMPLAY_TEST_DATABASE_URL),$(DATABASE_URL))
+
+.PHONY: test-db
+test-db: ## Run the database-backed tests. Needs `pnpm db:up`.
+	GHOSTMPLAY_TEST_DATABASE_URL="$(TEST_DATABASE_URL)" go test -v ./internal/database/...
+
 # The migration CLI takes a postgres:// URL, while the app takes DATABASE_URL
 # in whatever form it was configured with. Two adjustments:
 #

@@ -125,8 +125,18 @@ func StartScheduler(scheduler *Scheduler, log *slog.Logger) (func(), error) {
 		return nil, err
 	}
 
+	// The stranded-row sweep runs on the same minute tick as the scrape itself
+	// rather than on its own schedule: it reads two rows and writes at most one,
+	// so the only thing the cadence buys is how long a wedged run stays on the
+	// panel, and a minute is already less than anyone watching will notice.
+	if _, err := c.AddFunc(SweepSchedule, func() {
+		scheduler.ReleaseOrphanedRuns(context.Background())
+	}); err != nil {
+		return nil, err
+	}
+
 	c.Start()
-	log.Info("sync scheduler started", "schedule", CronSchedule, "pendingCheck", PendingDueCheckSchedule)
+	log.Info("sync scheduler started", "schedule", CronSchedule, "pendingCheck", PendingDueCheckSchedule, "sweep", SweepSchedule)
 
 	// c.Stop() returns a context that is done once every running job has
 	// finished. Waiting on it means a deploy waits for an in-progress run rather

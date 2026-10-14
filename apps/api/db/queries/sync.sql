@@ -51,12 +51,32 @@ ON CONFLICT (kind) DO UPDATE SET
 -- Stamped on failure too -- the point is "when did we last try", and a permanently
 -- failing job re-trying every few minutes would hammer an upstream where every
 -- request costs real capacity.
+--
+-- The timestamp is named once and referenced through a subquery, rather than
+-- written twice as $2. That is not a style preference. A parameter that appears
+-- twice in one statement has to deduce the same type in both places, and Postgres
+-- does not: bare in the last_finished_at position it deduces from the target
+-- column, but inside the CASE there is no target column for the parser to resolve
+-- against, so it deduces something else and rejects the whole statement at parse
+-- time with "inconsistent types deduced for parameter $2" (SQLSTATE 42P08). The
+-- failure is total rather than intermittent, and invisible to the test suite
+-- because fakeQuerier never executes SQL -- so every run finished without clearing
+-- running_since and left the kind permanently marked as running. One occurrence,
+-- cast once, is not deducible two ways. See internal/database/queries_test.go,
+-- which runs the real statements against a real database for exactly this reason.
 -- name: UpsertSyncRunFinished :exec
 INSERT INTO sync_state (
   kind, running_since, last_finished_at, last_pending_at,
   last_status, last_stats, last_error
 )
-VALUES ($1, NULL, $2, CASE WHEN sqlc.arg('mode')::text = 'pending' THEN $2 END, $3, $4, $5)
+SELECT sqlc.arg('kind'),
+       NULL,
+       f.finished_at,
+       CASE WHEN sqlc.arg('mode')::text = 'pending' THEN f.finished_at END,
+       sqlc.arg('last_status'),
+       sqlc.arg('last_stats'),
+       sqlc.arg('last_error')
+FROM (SELECT sqlc.arg('last_finished_at')::timestamptz AS finished_at) f
 ON CONFLICT (kind) DO UPDATE SET
   running_since = NULL,
   last_finished_at = EXCLUDED.last_finished_at,
@@ -99,5 +119,27 @@ SET running_since = NULL,
 WHERE running_since IS NOT NULL
 RETURNING kind;
 
--- name: ExistsSyncStateForLock :one
-SELECT EXISTS(SELECT 1 FROM sync_state WHERE kind = $1 AND running_since IS NOT NULL);
+-- Releasing one kind's stranded row.
+--
+-- The non-destructive counterpart to the boot sweep: same three columns written,
+-- no data touched, so it is safe to point at a kind whose run is merely unknown
+-- rather than dead. It backs both the admin reset endpoint and the periodic
+-- sweeper, which is why it is per-kind -- the boot sweep above is unconditional
+-- and can only run when no run of any kind is in flight.
+--
+-- `AND running_since IS NOT NULL` is the whole design. It makes the query a
+-- no-op when the kind is not stuck, so "nothing to release" is answered by zero
+-- rows rather than by the caller having to check first, and it makes the write
+-- safe against the race the callers have anyway: a row can go from stuck to
+-- genuinely running between the caller's read and this statement. RETURNING
+-- because that distinction is the answer -- a row comes back only if there was
+-- something to release.
+-- name: ReleaseStrandedSync :one
+UPDATE sync_state
+SET running_since = NULL,
+    last_finished_at = now(),
+    last_status = 'interrupted',
+    last_error = sqlc.narg('last_error')
+WHERE kind = sqlc.arg('kind')::text
+  AND running_since IS NOT NULL
+RETURNING kind;

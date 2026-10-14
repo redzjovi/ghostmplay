@@ -125,6 +125,24 @@ pnpm test         # go test for the API, vitest for the web app
 pnpm check        # all of the above plus the production build
 ```
 
+`pnpm test` needs nothing running. The database-backed tests are a separate target,
+because the one class of bug they exist for is invisible to everything else:
+
+```bash
+pnpm db:up && pnpm test:db
+```
+
+`UpsertSyncRunFinished` once named its timestamp parameter twice — once bare in a
+column position, once inside a `CASE` — and Postgres rejected the statement at parse
+time with `42P08: inconsistent types deduced for parameter $2`. Every call failed,
+so `running_since` was never cleared and every sync kind sat permanently marked as
+running. The entire suite stayed green, because every other query test runs against
+a fake that records calls without ever handing a string to Postgres. `pnpm test:db`
+runs the real statements against a real database and fails on any SQLSTATE that
+means the statement itself is wrong. Each test makes a scratch database, migrates
+it, and drops it, so the application database is never touched; it defaults to
+`DATABASE_URL` and skips itself if no server is reachable.
+
 To manage the schema by hand:
 
 ```bash
@@ -243,11 +261,36 @@ than what the walk touched.
 
 **The lock has no TTL, by design.** `LockService` is an in-process mutex with a
 compare-and-delete release, so a holder can only ever free its own lock. The keys
-never expire because the lock is released in a `defer`, and a lock cannot outlive
-the process that took it. (This corrects an earlier claim that the lock had a
+never expire because the lock is released in a `defer`, and a lock cannot outlive the
+process that took it. (This corrects an earlier claim that the lock had a
 renewing TTL; it never did.) Crash recovery is durable, not in-memory:
 `sync_state.running_since` is non-null exactly while a run holds the lock, and boot
 marks any row found in that state `interrupted`.
+
+**Nothing expires `running_since`, so three things clear it.** A run that dies with
+the lock held leaves the column set forever, and since it *is* the lock, the panel
+reports the kind as running and disables every control on its card. The three paths
+that undo it, in the order you would reach for them:
+
+- **Boot** marks every row found running `interrupted` — covers a container that was
+  replaced or a host that rebooted mid-run.
+- **A sweep, every minute**, reaps rows this process is not actually running. It
+  tests `running_since` against the in-memory in-flight map rather than a wall-clock
+  age, so a six-hour backfill is never mistaken for a wedged one and nothing needs a
+  timeout that would have to be guessed above the longest legitimate run. This is what
+  catches a scrape wedged on an upstream that never answers, which boot recovery
+  cannot see because the process around it is perfectly healthy. It relies on one
+  ordering in `Enqueue`: the in-flight entry is registered *before* `running_since`
+  is written, so the two can never disagree in the dangerous direction.
+- **`POST /api/admin/sync/reset`** (`{"kind":"…","confirm":true}`), which the Data
+  page surfaces as a "Reset stuck" button that appears only while a kind reports
+  running. It clears the row and nothing else — no data is deleted, unlike `/clear`,
+  which despite the name empties the ledger. It returns 409 while a run genuinely
+  holds the lock, so it cannot interrupt a live scrape.
+
+A panic in a scraper is caught and recorded as a failed run rather than taking the
+process down with the lock set. The sweeper assumes a single process, the same
+constraint the lock itself has — see `docs/DEPLOY-VOROA.md`.
 
 **Every timestamp in the ledger is UTC, and the upstream's are not.** The transfer
 log returns a bare `YYYY-MM-DD HH:mm:ss` with no offset, and it is KST — the same

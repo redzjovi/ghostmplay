@@ -32,6 +32,7 @@ func (h *Controller) Register(router fiber.Router) {
 	router.Get("/status", h.Status)
 	router.Post("", h.Enqueue)
 	router.Post("/clear", h.Clear)
+	router.Post("/reset", h.Reset)
 }
 
 // Status reports both kinds' current state.
@@ -100,6 +101,24 @@ func (h *Controller) Clear(c *fiber.Ctx) error {
 	return c.JSON(result)
 }
 
+// Reset releases a kind's stuck run. No data is deleted.
+//
+// 409 while a run is in progress, for the same reason Clear has one: if a scrape
+// is really running, the row is not stuck and resetting it would report a run
+// that is still going as though it had been interrupted.
+func (h *Controller) Reset(c *fiber.Ctx) error {
+	kind, err := parseKindWithConfirm(c.Body(), "reset sync state")
+	if err != nil {
+		return err
+	}
+
+	result, err := h.orchestrator.Reset(c.Context(), kind)
+	if err != nil {
+		return err
+	}
+	return c.JSON(result)
+}
+
 func parseEnqueueRequest(body []byte) (EnqueueOptions, error) {
 	raw, err := decodeObject(body)
 	if err != nil {
@@ -137,6 +156,20 @@ func parseEnqueueRequest(body []byte) (EnqueueOptions, error) {
 }
 
 func parseClearRequest(body []byte) (Kind, error) {
+	return parseKindWithConfirm(body, "clear data")
+}
+
+// parseKindWithConfirm is the body shape both /clear and /reset take:
+// `{"kind":"marketplace|history","confirm":true}`.
+//
+// Declared here rather than as a struct, because decodeObject reads it as a map
+// and the two endpoints share the whole shape. The confirm flag is checked by
+// presence, not value: the client's job is to show a dialog and pass the flag
+// once the person has agreed. A client that sent `confirm: false` is one that
+// did not. What the caller gets to choose is the wording of the refusal, because
+// the two endpoints are not equally dangerous and should not read as though they
+// were.
+func parseKindWithConfirm(body []byte, what string) (Kind, error) {
 	raw, err := decodeObject(body)
 	if err != nil {
 		return "", err
@@ -147,11 +180,8 @@ func parseClearRequest(body []byte) (Kind, error) {
 		return "", common.BadRequest("kind must be one of: marketplace, history")
 	}
 
-	// The confirm flag is checked by presence, not value: the client's job is to
-	// show a dialog and pass the flag once the person has agreed. A client that
-	// sent `confirm: false` is one that did not.
 	if !boolField(raw, "confirm") {
-		return "", common.BadRequest("confirm must be true to clear data")
+		return "", common.BadRequest("confirm must be true to " + what)
 	}
 
 	return Kind(kind), nil

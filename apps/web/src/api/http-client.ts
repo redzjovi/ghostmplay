@@ -157,6 +157,16 @@ export interface ClearSyncDataResult {
   deleted: { items: number; details: number } | { transfers: number }
 }
 
+/**
+ * What a reset released. `reset: false` means the kind was not stuck, which is
+ * what the endpoint returns when the button is pressed on a healthy panel — not
+ * an error, so the UI has nothing to report.
+ */
+export interface ResetSyncStateResult {
+  kind: SyncKind
+  reset: boolean
+}
+
 export interface WebApiAccount {
   id: number
   /** The verified Google address. */
@@ -190,6 +200,15 @@ export interface WebApi {
        * affordance, so a stale script cannot empty a table by accident.
        */
       clear(input: { kind: SyncKind; confirm: true }): Promise<ClearSyncDataResult>
+      /**
+       * Releases a run the server still reports as running. No data is deleted —
+       * this clears the stuck row only, and is refused with 409 while a scrape is
+       * genuinely in flight.
+       *
+       * `confirm` is a body field for the same reason it is on `clear`: it is the
+       * server's half of the dialog, so a stale script cannot move state silently.
+       */
+      reset(input: { kind: SyncKind; confirm: true }): Promise<ResetSyncStateResult>
     }
   }
   marketplace: {
@@ -254,6 +273,7 @@ export const api: WebApi = {
       status: () => get('/admin/sync/status'),
       enqueue: (input) => post('/admin/sync', input),
       clear: (input) => post('/admin/sync/clear', input),
+      reset: (input) => post('/admin/sync/reset', input),
     },
   },
 

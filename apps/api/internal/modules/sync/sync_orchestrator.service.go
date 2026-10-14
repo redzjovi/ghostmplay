@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -161,7 +162,11 @@ func (o *Orchestrator) Enqueue(ctx context.Context, opts EnqueueOptions) (Enqueu
 	startedAt := time.Now()
 
 	// Registered before anything that can yield, so a second request arriving
-	// in the next few lines sees this run rather than racing it.
+	// in the next few lines sees this run rather than racing it. It is also
+	// registered before running_since is written below, and that ordering is what
+	// ReleaseOrphanedRuns depends on: the sweeper treats "running in the database
+	// but not in this map" as a stranded row, so the two must never disagree in
+	// that order.
 	done := make(chan struct{})
 	o.mu.Lock()
 	o.inflight[opts.Kind] = done
@@ -177,8 +182,21 @@ func (o *Orchestrator) Enqueue(ctx context.Context, opts EnqueueOptions) (Enqueu
 		return EnqueueResult{}, fmt.Errorf("record sync start: %w", err)
 	}
 
+	// The recovery is registered after close(done) so it runs first: defers unwind
+	// last-in-first-out, and the outcome has to be written before anything waiting
+	// on this run is told it finished. A panic that escaped here would take the
+	// process down with running_since still set, and boot recovery would be the
+	// only thing that could clean it up.
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				// finish clears the inflight entry, so a panic cannot leave this
+				// process refusing to start another run of the kind either.
+				o.finish(ctx, opts.Kind, opts.Mode, StatusFailed, nil, fmt.Sprintf("panic: %v", r))
+				o.log.Error("sync panicked", "kind", opts.Kind, "mode", opts.Mode, "panic", r)
+			}
+		}()
 		o.run(context.WithoutCancel(ctx), opts, lock)
 	}()
 
@@ -312,10 +330,16 @@ func (o *Orchestrator) finish(ctx context.Context, kind Kind, mode Mode, status 
 
 	// A failure to record the outcome must not take the process down, and it must
 	// not leave the inflight entry stuck: the run really is over either way.
+	//
+	// LastFinishedAt is a plain time.Time rather than the sql.NullTime the other
+	// timestamps use, because the statement now names the parameter once and casts
+	// it, and sqlc can no longer infer its nullability from a column position --
+	// there is no column position left to infer from. It was never null in the
+	// first place: this is written on every terminal outcome.
 	if err := o.queries.UpsertSyncRunFinished(ctx, dbgen.UpsertSyncRunFinishedParams{
 		Kind:           string(kind),
 		Mode:           string(mode),
-		LastFinishedAt: pgTime(time.Now()),
+		LastFinishedAt: time.Now(),
 		LastStatus:     sql.NullString{String: string(status), Valid: true},
 		LastStats:      statsJSON,
 		LastError:      nullableString(errMsg),
@@ -430,4 +454,108 @@ func (o *Orchestrator) Clear(ctx context.Context, kind Kind) (ClearResult, error
 
 	o.log.Warn("cleared sync data", "kind", kind, "deleted", deleted)
 	return ClearResult{Kind: kind, Deleted: deleted}, nil
+}
+
+// ResetResult is what a reset released.
+type ResetResult struct {
+	Kind Kind `json:"kind"`
+	// Reset is false when the kind was not stuck, which is not an error: the
+	// caller asked for a state that did not exist and the state it wanted does
+	// not exist now.
+	Reset bool `json:"reset"`
+}
+
+// Reset releases a kind's stuck run without touching its data.
+//
+// It exists because the alternative -- restarting the process -- is a
+// deployment, and because running_since has no TTL to expire it. The two ways a
+// row gets stuck are a process that died holding it, which boot recovery already
+// handles, and a run that is alive but wedged, which nothing would ever clear.
+// Both leave the same thing behind: running_since set, last_status 'running',
+// and a panel that will show it as still going indefinitely.
+//
+// The guards are Clear's, unchanged, and that is deliberate rather than a
+// copy-paste: the same lock that serialises runs has to be the thing that decides
+// whether one is in progress, or the two endpoints would disagree about what
+// "running" means. Refusing here is safe because the stuck case this exists for
+// has no in-flight run -- a genuinely live run holds the lock and passes both
+// checks, so the reset reports 409 rather than clearing a row out from under a
+// scrape that is still writing.
+func (o *Orchestrator) Reset(ctx context.Context, kind Kind) (ResetResult, error) {
+	if o.Settled(kind) != nil {
+		return ResetResult{}, common.Conflict(fmt.Sprintf("A %s sync is in progress", kind))
+	}
+
+	lock := o.locks.Acquire(lockKey(kind))
+	if lock == nil {
+		return ResetResult{}, common.Conflict(fmt.Sprintf("A %s sync is in progress", kind))
+	}
+	defer lock.Release()
+
+	return o.releaseStranded(ctx, kind, "Reset by admin")
+}
+
+// releaseStranded is the one write both Reset and the sweeper make.
+func (o *Orchestrator) releaseStranded(ctx context.Context, kind Kind, reason string) (ResetResult, error) {
+	_, err := o.queries.ReleaseStrandedSync(ctx, dbgen.ReleaseStrandedSyncParams{
+		Kind:      string(kind),
+		LastError: nullableString(reason),
+	})
+
+	// No rows means the kind was not running, which is the condition the caller
+	// wanted reached rather than a failure. Same reading of ErrNoRows as
+	// LastPendingRun.
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return ResetResult{}, fmt.Errorf("release stranded sync: %w", err)
+	}
+
+	return ResetResult{Kind: kind, Reset: err == nil}, nil
+}
+
+// ReleaseOrphanedRuns reaps rows claiming a run this process is not making.
+//
+// running_since is only ever cleared by a terminal write from the run that set
+// it, and nothing expires it. So a run that dies in a way the boot sweep cannot
+// see -- a scrape wedged on an upstream that never answers, a finish whose
+// database write failed -- leaves the row running forever while the process
+// around it is perfectly healthy. This is the periodic counterpart to
+// RecoverStrandedRuns, and it is what makes that self-healing rather than
+// restart-dependent.
+//
+// "Not in flight here" is the whole test, and it rests on an ordering Enqueue
+// guarantees: the inflight entry is registered before running_since is written,
+// so a row can never become visible as running ahead of the entry that owns it.
+// A sweeper racing a genuine start therefore sees the entry and leaves it alone.
+//
+// This assumes a single process. The inflight map is per-process, so with two
+// instances running this would reap the other's live run -- the same single-
+// instance constraint the lock itself already has. See docs/DEPLOY-VOROA.md.
+func (o *Orchestrator) ReleaseOrphanedRuns(ctx context.Context) ([]Kind, error) {
+	rows, err := o.queries.ListSyncStates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read sync states: %w", err)
+	}
+
+	released := make([]Kind, 0, len(rows))
+	for _, row := range rows {
+		kind := Kind(row.Kind)
+		if !row.RunningSince.Valid || o.Settled(kind) != nil {
+			continue
+		}
+
+		res, err := o.releaseStranded(ctx, kind, "No run was holding this lock")
+		if err != nil {
+			return released, err
+		}
+		if res.Reset {
+			released = append(released, kind)
+		}
+	}
+
+	if len(released) > 0 {
+		// Warned rather than logged plainly: something the panel showed as
+		// running was not, and that is the kind of line that gets read.
+		o.log.Warn("released sync runs this process was not making", "kinds", released)
+	}
+	return released, nil
 }

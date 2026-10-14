@@ -52,7 +52,6 @@ type Querier interface {
 	// handler.
 	ExistsFavoriteByName(ctx context.Context, arg ExistsFavoriteByNameParams) (bool, error)
 	ExistsMarketplaceItemByID(ctx context.Context, id int32) (bool, error)
-	ExistsSyncStateForLock(ctx context.Context, kind string) (bool, error)
 	ExistsTransferByTxHash(ctx context.Context, txHash string) (bool, error)
 	FindMarketplaceItemCreatedAt(ctx context.Context, ids []int32) ([]FindMarketplaceItemCreatedAtRow, error)
 	// The two upsert lookups. They are separate queries rather than one COALESCE
@@ -259,6 +258,22 @@ type Querier interface {
 	//
 	// RETURNING because the log line says how many were stranded.
 	MarkStrandedSyncsInterrupted(ctx context.Context) ([]string, error)
+	// Releasing one kind's stranded row.
+	//
+	// The non-destructive counterpart to the boot sweep: same three columns written,
+	// no data touched, so it is safe to point at a kind whose run is merely unknown
+	// rather than dead. It backs both the admin reset endpoint and the periodic
+	// sweeper, which is why it is per-kind -- the boot sweep above is unconditional
+	// and can only run when no run of any kind is in flight.
+	//
+	// `AND running_since IS NOT NULL` is the whole design. It makes the query a
+	// no-op when the kind is not stuck, so "nothing to release" is answered by zero
+	// rows rather than by the caller having to check first, and it makes the write
+	// safe against the race the callers have anyway: a row can go from stuck to
+	// genuinely running between the caller's read and this statement. RETURNING
+	// because that distinction is the answer -- a row comes back only if there was
+	// something to release.
+	ReleaseStrandedSync(ctx context.Context, arg ReleaseStrandedSyncParams) (string, error)
 	// The "clear all" reset. kind and mode survive deliberately: the panel still
 	// needs a row per kind to render, and dropping the row would make the next
 	// status read report a kind as never-run.
@@ -302,6 +317,19 @@ type Querier interface {
 	// Stamped on failure too -- the point is "when did we last try", and a permanently
 	// failing job re-trying every few minutes would hammer an upstream where every
 	// request costs real capacity.
+	//
+	// The timestamp is named once and referenced through a subquery, rather than
+	// written twice as $2. That is not a style preference. A parameter that appears
+	// twice in one statement has to deduce the same type in both places, and Postgres
+	// does not: bare in the last_finished_at position it deduces from the target
+	// column, but inside the CASE there is no target column for the parser to resolve
+	// against, so it deduces something else and rejects the whole statement at parse
+	// time with "inconsistent types deduced for parameter $2" (SQLSTATE 42P08). The
+	// failure is total rather than intermittent, and invisible to the test suite
+	// because fakeQuerier never executes SQL -- so every run finished without clearing
+	// running_since and left the kind permanently marked as running. One occurrence,
+	// cast once, is not deducible two ways. See internal/database/queries_test.go,
+	// which runs the real statements against a real database for exactly this reason.
 	UpsertSyncRunFinished(ctx context.Context, arg UpsertSyncRunFinishedParams) error
 	// Only the in-flight columns are written on start. last_finished_at, last_stats
 	// and last_error deliberately keep the previous run's values, so a run that is

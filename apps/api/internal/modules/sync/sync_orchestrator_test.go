@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,8 @@ type fakeQuerier struct {
 	finished []dbgen.UpsertSyncRunFinishedParams
 	// stranded is what MarkStrandedSyncsInterrupted returns.
 	stranded []string
+	// released records every ReleaseStrandedSync call.
+	released []dbgen.ReleaseStrandedSyncParams
 	// states is what GetSyncState / ListSyncStates return.
 	states map[string]dbgen.SyncState
 }
@@ -88,6 +91,27 @@ func (f *fakeQuerier) ResetSyncState(_ context.Context, kind string) error {
 	return nil
 }
 
+// ReleaseStrandedSync mirrors the query's own guard: it only writes when the row
+// is actually set running, and returns ErrNoRows otherwise. Driving it from the
+// same fake state as ListSyncStates is what makes a sweeper test honest -- a stub
+// that released unconditionally would pass a test that should not exist.
+func (f *fakeQuerier) ReleaseStrandedSync(_ context.Context, p dbgen.ReleaseStrandedSyncParams) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.released = append(f.released, p)
+	row, ok := f.states[p.Kind]
+	if !ok || !row.RunningSince.Valid {
+		return "", sql.ErrNoRows
+	}
+	row.RunningSince = sql.NullTime{}
+	row.LastFinishedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	row.LastStatus = sql.NullString{String: string(StatusInterrupted), Valid: true}
+	row.LastError = p.LastError
+	f.states[p.Kind] = row
+	return p.Kind, nil
+}
+
 // fakeExecutor records what it was asked to run and can be told to fail.
 type fakeExecutor struct {
 	mu          sync.Mutex
@@ -96,6 +120,9 @@ type fakeExecutor struct {
 	failures    int // number of leading calls that fail transiently
 	block       chan struct{}
 	clearedKind string
+	// panics makes the named call panic instead of returning, so the goroutine's
+	// recovery can be tested without a whole scraper to break.
+	panics string
 }
 
 func (e *fakeExecutor) SyncMarketplace(_ context.Context, _ string, _ marketplace.SyncMode) (Stats, error) {
@@ -103,6 +130,10 @@ func (e *fakeExecutor) SyncMarketplace(_ context.Context, _ string, _ marketplac
 	e.calls = append(e.calls, "marketplace")
 	n := len(e.calls)
 	block, failures := e.block, e.failures
+	if e.panics == "marketplace" {
+		e.mu.Unlock()
+		panic("scraper exploded")
+	}
 	e.mu.Unlock()
 
 	if block != nil {
@@ -163,11 +194,20 @@ func TestHistoryModeDispatch(t *testing.T) {
 	}
 }
 
+// clearedKind records that a clear reached the executor at all. It is set here
+// rather than inferred from the returned counts, so a test can assert the
+// negative -- that Reset never deletes -- which the counts cannot show.
 func (e *fakeExecutor) ClearMarketplace(_ context.Context) (marketplace.ClearResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clearedKind = "marketplace"
 	return marketplace.ClearResult{Items: 5, Details: 5}, nil
 }
 
 func (e *fakeExecutor) ClearHistory(_ context.Context) (marketplace.HistoryClearResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.clearedKind = "history"
 	return marketplace.HistoryClearResult{Transfers: 7}, nil
 }
 
@@ -410,6 +450,224 @@ func TestRecoverStrandedRuns(t *testing.T) {
 	}
 	// The whole point is that a killed run stops looking "running", so the call
 	// must have been made. The specific rows it returns are informational.
+}
+
+// A running_since row nobody is clearing is the failure this whole path exists
+// for: the panel spins on it forever and every control is disabled.
+func TestResetReleasesAStrandedRow(t *testing.T) {
+	q := newFakeQuerier()
+	q.states["marketplace"] = dbgen.SyncState{
+		Kind:         "marketplace",
+		RunningSince: sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true},
+		LastStatus:   sql.NullString{String: string(StatusRunning), Valid: true},
+	}
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{}, testLogger())
+
+	res, err := orch.Reset(context.Background(), KindMarketplace)
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if !res.Reset {
+		t.Error("Reset reported nothing to release for a row that was stuck")
+	}
+
+	// The row is the thing the panel reads, so it is the thing asserted.
+	snap, err := orch.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if snap.Marketplace.Running {
+		t.Error("marketplace still reports running after a reset")
+	}
+	if snap.Marketplace.LastStatus == nil || *snap.Marketplace.LastStatus != StatusInterrupted {
+		t.Errorf("lastStatus = %v, want interrupted", snap.Marketplace.LastStatus)
+	}
+}
+
+// The endpoint has to be safe to call when nothing is stuck, because that is
+// what a stale button or a repeated click looks like -- not an error.
+func TestResetIsNotAnErrorWhenNothingIsStuck(t *testing.T) {
+	q := newFakeQuerier()
+	q.states["marketplace"] = dbgen.SyncState{
+		Kind:       "marketplace",
+		LastStatus: sql.NullString{String: string(StatusDone), Valid: true},
+	}
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{}, testLogger())
+
+	res, err := orch.Reset(context.Background(), KindMarketplace)
+	if err != nil {
+		t.Fatalf("Reset on a settled kind: %v", err)
+	}
+	if res.Reset {
+		t.Error("Reset reported a release for a kind that was not running")
+	}
+}
+
+func TestResetRefusesWhileRunning(t *testing.T) {
+	q := newFakeQuerier()
+	block := make(chan struct{})
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{block: block}, testLogger())
+
+	if _, err := orch.Enqueue(context.Background(), EnqueueOptions{Kind: KindMarketplace}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// A live run is not a stuck run. Clearing its row would report a scrape that
+	// is still writing as though it had been interrupted.
+	if _, err := orch.Reset(context.Background(), KindMarketplace); err == nil {
+		t.Error("Reset succeeded while a run was in flight, want a conflict")
+	} else {
+		var apiErr *common.Error
+		if !errors.As(err, &apiErr) || apiErr.Status != 409 {
+			t.Errorf("Reset error = %v, want a 409", err)
+		}
+	}
+
+	close(block)
+	orch.Wait(context.Background(), KindMarketplace)
+}
+
+// Reset must not delete anything. It shares a kind with Clear, and the two look
+// alike from the panel, so the difference is pinned rather than trusted — and the
+// second half matters as much as the first: it shows the assertion can fail, so
+// the first half is not passing because the fake never records anything.
+func TestResetDeletesNoData(t *testing.T) {
+	q := newFakeQuerier()
+	q.states["history"] = dbgen.SyncState{
+		Kind:         "history",
+		RunningSince: sql.NullTime{Time: time.Now(), Valid: true},
+	}
+	exec := &fakeExecutor{}
+	orch := NewOrchestrator(q, common.NewLockService(), exec, testLogger())
+
+	if _, err := orch.Reset(context.Background(), KindHistory); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	exec.mu.Lock()
+	cleared := exec.clearedKind
+	exec.mu.Unlock()
+	if cleared != "" {
+		t.Errorf("Reset cleared data for %q, want no deletes at all", cleared)
+	}
+
+	// The same kind, through the endpoint that does delete.
+	if _, err := orch.Clear(context.Background(), KindHistory); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	exec.mu.Lock()
+	cleared = exec.clearedKind
+	exec.mu.Unlock()
+	if cleared != "history" {
+		t.Errorf("Clear recorded %q, want history -- so the Reset check above was live", cleared)
+	}
+}
+
+// A wedged run is the case boot recovery cannot see: the process is alive, so
+// nothing reaps the row, and the sweep is what ends it.
+func TestReleaseOrphanedRunsReapsOnlyWhatNobodyIsRunning(t *testing.T) {
+	block := make(chan struct{})
+	q := newFakeQuerier()
+	// Marketplace is a genuine live run; history is wedged from an earlier one.
+	q.states["history"] = dbgen.SyncState{
+		Kind:         "history",
+		RunningSince: sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true},
+	}
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{block: block}, testLogger())
+
+	if _, err := orch.Enqueue(context.Background(), EnqueueOptions{Kind: KindMarketplace}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	released, err := orch.ReleaseOrphanedRuns(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseOrphanedRuns: %v", err)
+	}
+	if len(released) != 1 || released[0] != KindHistory {
+		t.Fatalf("released = %v, want just history", released)
+	}
+
+	// The live run must have survived untouched, or the sweep would be killing
+	// the very scrapes it exists to protect. Asserted on the writes rather than
+	// on the row: the fake's start write records itself separately and never puts
+	// running_since into the state map, so the row cannot show it.
+	q.mu.Lock()
+	writes := append([]dbgen.ReleaseStrandedSyncParams(nil), q.released...)
+	wedged := q.states["history"]
+	q.mu.Unlock()
+
+	if len(writes) != 1 || writes[0].Kind != string(KindHistory) {
+		t.Errorf("sweep wrote %+v, want only history", writes)
+	}
+	if wedged.RunningSince.Valid {
+		t.Error("history is still marked running after the sweep")
+	}
+
+	close(block)
+	orch.Wait(context.Background(), KindMarketplace)
+}
+
+// The sweep runs every minute forever, so "nothing to do" is the overwhelmingly
+// common outcome and must not be reported as a release.
+func TestReleaseOrphanedRunsIsQuietWhenSettled(t *testing.T) {
+	q := newFakeQuerier()
+	q.states["marketplace"] = dbgen.SyncState{
+		Kind:       "marketplace",
+		LastStatus: sql.NullString{String: string(StatusDone), Valid: true},
+	}
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{}, testLogger())
+
+	released, err := orch.ReleaseOrphanedRuns(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseOrphanedRuns: %v", err)
+	}
+	if len(released) != 0 {
+		t.Errorf("released = %v, want nothing", released)
+	}
+
+	// Not even the query: a settled kind is not even a candidate, so this costs
+	// one read a minute rather than a read and a write.
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.released) != 0 {
+		t.Errorf("the sweep wrote for a settled kind: %+v", q.released)
+	}
+}
+
+// A panic in the scraper used to take the process down with running_since set,
+// which is a stuck panel until the next deploy. The recovery records the failure
+// and lets the kind run again.
+func TestRunPanicIsRecordedNotPropagated(t *testing.T) {
+	q := newFakeQuerier()
+	orch := NewOrchestrator(q, common.NewLockService(), &fakeExecutor{panics: "marketplace"}, testLogger())
+
+	if _, err := orch.Enqueue(context.Background(), EnqueueOptions{Kind: KindMarketplace}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// Wait returns once the recovery has run: the outcome is written before the
+	// in-flight channel closes, which is the ordering that makes this test a
+	// test rather than a race.
+	orch.Wait(context.Background(), KindMarketplace)
+
+	q.mu.Lock()
+	finished := append([]dbgen.UpsertSyncRunFinishedParams(nil), q.finished...)
+	q.mu.Unlock()
+
+	if len(finished) != 1 {
+		t.Fatalf("finished writes = %d, want 1 -- a panic recorded nothing", len(finished))
+	}
+	if finished[0].LastStatus.String != string(StatusFailed) {
+		t.Errorf("finished status = %q, want failed", finished[0].LastStatus.String)
+	}
+	if !strings.Contains(finished[0].LastError.String, "panic") {
+		t.Errorf("last_error = %q, want it to say the run panicked", finished[0].LastError.String)
+	}
+
+	// The inflight entry has to be gone or the kind could never run again.
+	if _, err := orch.Enqueue(context.Background(), EnqueueOptions{Kind: KindMarketplace}); err != nil {
+		t.Errorf("Enqueue after a panic: %v", err)
+	}
+	orch.Wait(context.Background(), KindMarketplace)
 }
 
 func TestStatusShapeAlwaysHasBothKinds(t *testing.T) {

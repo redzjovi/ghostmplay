@@ -5,6 +5,7 @@ import {
   PENDING_MODE,
   backfillMode,
   modeLabel,
+  shouldOfferReset,
   shouldShowManualSync,
   statusLabel,
   statOf,
@@ -173,5 +174,49 @@ describe('shouldShowManualSync', () => {
     // widening of the endpoint should not silently start offering a control that
     // answers 403.
     expect(shouldShowManualSync({ isAdmin: false, cronEnabled: false, loaded: true })).toBe(false)
+  })
+})
+
+describe('shouldOfferReset', () => {
+  it('offers the release exactly when the server says a run is going', () => {
+    expect(shouldOfferReset(status({ running: true }))).toBe(true)
+  })
+
+  /**
+   * The stuck state this exists for. `running_since` has no TTL, so a row left
+   * behind by a process that died mid-run reports running forever — and every
+   * other control on the card is disabled by that flag, which is why this button
+   * is the one that ignores it.
+   */
+  it('stays offered for a run the server claims is going, however stale the claim', () => {
+    // Deliberately no staleness threshold: a client-side timer would be guessing
+    // at a fact only the server has, and would hide the control during exactly
+    // the long backfills where an admin most wants to know it exists.
+    const stale = status({
+      running: true,
+      runningSince: '2020-01-01T00:00:00.000Z',
+      lastStatus: 'running',
+    })
+    expect(shouldOfferReset(stale)).toBe(true)
+  })
+
+  it('is absent when nothing is running, since there is nothing to release', () => {
+    expect(shouldOfferReset(status())).toBe(false)
+    expect(shouldOfferReset(status({ lastStatus: 'done' }))).toBe(false)
+    expect(shouldOfferReset(status({ lastStatus: 'failed' }))).toBe(false)
+    expect(shouldOfferReset(status({ lastStatus: 'interrupted' }))).toBe(false)
+  })
+
+  /**
+   * The two predicates must agree on what `running` means. `isBusy` in DataView
+   * disables the scrape buttons on the same flag, so if they disagreed the card
+   * would show a release for a kind it also believed was mid-scrape — with every
+   * other control disabled and no explanation on screen.
+   */
+  it('tracks the same flag statusLabel does', () => {
+    for (const running of [true, false]) {
+      const s = status({ running, lastStatus: 'running' })
+      expect(shouldOfferReset(s)).toBe(statusLabel(s) === 'Running')
+    }
   })
 })

@@ -69,6 +69,26 @@ export function statOf(status: SyncKindStatus, key: string): number | null {
 }
 
 /**
+ * Whether to offer the "Reset stuck" control.
+ *
+ * `running` is the server's own claim, derived from a `running_since` that
+ * nothing expires -- so a row left behind by a process that died mid-run makes
+ * this true forever, and the card is then unusable: every other control is
+ * disabled while a run is showing, which is what this is the escape from. The
+ * button is the one thing on the card that must ignore that.
+ *
+ * Offered whenever the server says running rather than after some staleness
+ * threshold. A real run is protected server-side -- the endpoint returns 409
+ * while the in-process lock is held -- so showing it during a genuine scrape
+ * costs a refused request rather than a mistimed interrupt. A client-side timer
+ * would be guessing at a fact only the server has, and would hide the control
+ * during exactly the long backfills where somebody most wants to know it exists.
+ */
+export function shouldOfferReset(status: SyncKindStatus): boolean {
+  return status.running
+}
+
+/**
  * Whether the list views should offer a manual "Sync Latest".
  *
  * A plain function because the vitest config runs in node with no DOM and no

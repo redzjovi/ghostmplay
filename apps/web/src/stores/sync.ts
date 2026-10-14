@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult, ClearSyncDataResult } from '@/api/http-client'
+import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult, ClearSyncDataResult, ResetSyncStateResult } from '@/api/http-client'
 import { useAuthStore } from './auth'
 import { shouldShowManualSync } from '@/lib/syncPanel'
 
@@ -157,6 +157,33 @@ export const useSyncStore = defineStore('sync', () => {
     }
   }
 
+  /**
+   * Releases a run the server still reports as running. Nothing is deleted.
+   *
+   * The counterpart to a stuck row: `running_since` has no TTL, so a run that
+   * died holding it leaves the panel spinning and every control disabled with no
+   * way back. `refresh()` follows for the same reason it does after a clear — the
+   * card is showing the state being changed, and only this endpoint's response
+   * plus a fresh snapshot can take it off the card.
+   *
+   * The server answers 409 if a scrape is genuinely running, and the error
+   * surfaces like any other: a refused reset is information, not a bug.
+   */
+  async function reset(kind: SyncKind): Promise<ResetSyncStateResult> {
+    loading.value = true
+    error.value = null
+    try {
+      const res = await window.api.admin.sync.reset({ kind, confirm: true })
+      await refresh()
+      return res
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : String(e)
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
   return {
     status,
     loading,
@@ -171,5 +198,6 @@ export const useSyncStore = defineStore('sync', () => {
     stopPolling,
     enqueue,
     clear,
+    reset,
   }
 })
