@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -55,9 +56,16 @@ type KindStatus struct {
 //
 // Both kinds are always present even when their row is missing, so the panel
 // renders a fixed shape rather than having to handle a kind appearing.
+//
+// CronEnabled is deployment configuration rather than a kind's state, and it is
+// here rather than on a separate endpoint because the list views already fetch
+// this one: it is what decides whether they offer a "Sync Latest" button, since
+// with the scheduler running the minute job already does that job. The endpoint
+// is admin-guarded, so a non-admin never receives it and never learns either way.
 type StatusSnapshot struct {
 	Marketplace KindStatus `json:"marketplace"`
 	History     KindStatus `json:"history"`
+	CronEnabled bool       `json:"cronEnabled"`
 }
 
 // Status reads the current state of both kinds.
@@ -122,15 +130,37 @@ func kindStatus(kind Kind, row dbgen.SyncState) KindStatus {
 	return out
 }
 
+// LastPendingRun reports when the history pending re-check last finished, and
+// whether it ever has.
+//
+// Its own column, not last_finished_at: the incremental cron rewrites that every
+// minute and takes the mode with it, so it answers "when did anything last run"
+// and can never answer this. A null watermark means the re-check has never
+// happened, which the caller reads as due rather than as an error.
+func (o *Orchestrator) LastPendingRun(ctx context.Context) (time.Time, bool, error) {
+	row, err := o.queries.GetSyncState(ctx, string(KindHistory))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	if !row.LastPendingAt.Valid {
+		return time.Time{}, false, nil
+	}
+	return row.LastPendingAt.Time, true, nil
+}
+
 // Scheduler runs the incremental sync on a timer.
 type Scheduler struct {
 	orchestrator *Orchestrator
 	log          *slog.Logger
+	now          func() time.Time
 }
 
 // NewScheduler builds the scheduler.
 func NewScheduler(orchestrator *Orchestrator, log *slog.Logger) *Scheduler {
-	return &Scheduler{orchestrator: orchestrator, log: log}
+	return &Scheduler{orchestrator: orchestrator, log: log, now: time.Now}
 }
 
 // RunLatest performs one incremental pass over both kinds, in order.
@@ -164,3 +194,74 @@ func (s *Scheduler) RunLatest(ctx context.Context) {
 // path fetches one page of listings and one page of transfers, so running more
 // often than that would mostly re-fetch the page it already has.
 const CronSchedule = "@every 1m"
+
+// The pending re-check's two constants.
+//
+// A due-check ticker rather than a cron expression, because the requirement is
+// "24 hours since the last pending run" and only a stored watermark can answer
+// that. Both obvious alternatives are wrong: `@every 24h` is relative to when the
+// process started, so it resets on every deploy and never fires at all on a
+// container redeployed more often than daily, and a wall-clock `0 0 * * *` would
+// ignore the last run entirely. Reading the watermark on a short ticker is also
+// why this is not a cron.Schedule: Next(t) takes no context and returns no error,
+// which is the wrong shape for a query.
+//
+// The ticker is coarse on purpose. The work is measured in hours when it is due
+// at all, so 15 minutes of granularity costs 96 single-row lookups a day --
+// almost all of which do nothing -- and buys the ability to notice a redeploy.
+const (
+	PendingDueCheckSchedule = "@every 15m"
+	PendingInterval         = 24 * time.Hour
+)
+
+// RunPendingIfDue starts a history pending re-check when one is due.
+//
+// "Due" is a function of the watermark, not of the clock, so this is safe to call
+// on every tick: almost every call reads one row and returns.
+//
+// A watermark of null counts as due. The re-check has never run, and a re-check
+// that has not happened yet is overdue by any interval.
+//
+// Unlike RunLatest this does not wait. It is on a 15-minute ticker, so a run that
+// could not start now is retried on a later tick rather than blocking the ticker
+// for however long the scrape takes -- and because a failed start does not move
+// the watermark, "could not start" stays due instead of costing a whole day.
+func (s *Scheduler) RunPendingIfDue(ctx context.Context) {
+	last, ran, err := s.orchestrator.LastPendingRun(ctx)
+	if err != nil {
+		s.log.Error("pending due-check could not read the watermark", "error", describeError(err))
+		return
+	}
+
+	// A negative elapsed means the clock moved backwards (NTP, a hand-set host).
+	// That reads as due rather than "not yet": parking until the clock caught up
+	// would silently postpone the re-check, and the watermark is stamped from
+	// this same process's clock, so it cannot be a standing disagreement between
+	// two machines the way a database-side clock could be.
+	if ran {
+		if elapsed := s.now().Sub(last); elapsed >= 0 && elapsed < PendingInterval {
+			return
+		}
+	}
+
+	since := "never"
+	if ran {
+		since = s.now().Sub(last).Round(time.Hour).String()
+	}
+	s.log.Info("pending re-check is due", "last", since)
+
+	result, err := s.orchestrator.Enqueue(ctx, EnqueueOptions{Kind: KindHistory, Mode: ModePending})
+	if err != nil {
+		// The watermark did not move, so the next tick tries again.
+		s.log.Error("pending re-check failed to start", "error", describeError(err))
+		return
+	}
+	if result.Deduped {
+		// Joined a run already in flight. The watermark still has not moved, so
+		// this stays due and the next tick picks it up -- which is the behaviour
+		// that stops a single busy minute from costing a whole day.
+		s.log.Info("pending re-check joined an in-flight run, will retry")
+		return
+	}
+	s.log.Info("cron started a pending re-check")
+}

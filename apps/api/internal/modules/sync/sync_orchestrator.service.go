@@ -44,6 +44,11 @@ const (
 	// ModeFull: walk the whole transfer ledger. The most expensive operation in
 	// the app.
 	ModeFull Mode = "full"
+	// ModePending: walk the whole transfer ledger but skip transfers already
+	// recorded claimed. Same page walk as ModeFull, a fraction of the upstream
+	// requests, and it never revisits a claimed row -- so ModeFull is still the
+	// way to correct one.
+	ModePending Mode = "pending"
 )
 
 // Status is a run's outcome.
@@ -72,8 +77,9 @@ type Stats map[string]any
 type Executor interface {
 	// SyncMarketplace scrapes listings.
 	SyncMarketplace(ctx context.Context, itemName string, mode marketplace.SyncMode) (Stats, error)
-	// SyncHistory fills the transfer ledger, either incrementally or in full.
-	SyncHistory(ctx context.Context, full bool) (Stats, error)
+	// SyncHistory fills the transfer ledger: incrementally, in full, or in full
+	// while skipping the transfers already recorded claimed.
+	SyncHistory(ctx context.Context, mode marketplace.HistorySyncMode) (Stats, error)
 	// ClearMarketplace deletes every listing and its detail blob.
 	ClearMarketplace(ctx context.Context) (marketplace.ClearResult, error)
 	// ClearHistory deletes every transfer. Users are left alone.
@@ -231,13 +237,13 @@ func (o *Orchestrator) run(ctx context.Context, opts EnqueueOptions, lock common
 		attrs = append(attrs, "error", describeError(err))
 
 		o.log.Error("sync failed", attrs...)
-		o.finish(ctx, opts.Kind, StatusFailed, nil, describeError(err))
+		o.finish(ctx, opts.Kind, opts.Mode, StatusFailed, nil, describeError(err))
 		return
 	}
 
 	o.log.Info("sync done", "kind", opts.Kind, "mode", opts.Mode,
 		"duration", elapsed.String(), "stats", stats)
-	o.finish(ctx, opts.Kind, StatusDone, stats, "")
+	o.finish(ctx, opts.Kind, opts.Mode, StatusDone, stats, "")
 }
 
 // execute dispatches to the right scrape, under the retry policy.
@@ -259,7 +265,17 @@ func (o *Orchestrator) execute(ctx context.Context, opts EnqueueOptions) (Stats,
 			}
 			stats, err = o.executor.SyncMarketplace(ctx, opts.ItemName, mode)
 		case KindHistory:
-			stats, err = o.executor.SyncHistory(ctx, opts.Mode == ModeFull)
+			// Spelled out rather than passed through, because a mode this table
+			// does not name has to land on the incremental walk -- the same silent
+			// downgrade lib/syncPanel.backfillMode exists to warn the UI about.
+			historyMode := marketplace.HistoryLatest
+			switch opts.Mode {
+			case ModeFull:
+				historyMode = marketplace.HistoryFull
+			case ModePending:
+				historyMode = marketplace.HistoryPending
+			}
+			stats, err = o.executor.SyncHistory(ctx, historyMode)
 		default:
 			err = fmt.Errorf("unknown sync kind %q", opts.Kind)
 		}
@@ -277,7 +293,11 @@ func (o *Orchestrator) execute(ctx context.Context, opts EnqueueOptions) (Stats,
 }
 
 // finish records a terminal outcome.
-func (o *Orchestrator) finish(ctx context.Context, kind Kind, status Status, stats Stats, errMsg string) {
+//
+// mode is threaded in rather than re-read because the pending watermark is
+// written here and only a pending run may move it. UpsertSyncRunFinished makes
+// that decision itself, so there is no call site that can forget to pass the mode.
+func (o *Orchestrator) finish(ctx context.Context, kind Kind, mode Mode, status Status, stats Stats, errMsg string) {
 	defer o.clearInflight(kind, nil)
 
 	// last_stats is nullable jsonb. A failed run stores null rather than an
@@ -294,6 +314,7 @@ func (o *Orchestrator) finish(ctx context.Context, kind Kind, status Status, sta
 	// not leave the inflight entry stuck: the run really is over either way.
 	if err := o.queries.UpsertSyncRunFinished(ctx, dbgen.UpsertSyncRunFinishedParams{
 		Kind:           string(kind),
+		Mode:           string(mode),
 		LastFinishedAt: pgTime(time.Now()),
 		LastStatus:     sql.NullString{String: string(status), Valid: true},
 		LastStats:      statsJSON,

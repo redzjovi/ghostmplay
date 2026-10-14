@@ -205,6 +205,31 @@ FROM marketplace_token_transfers
 WHERE tx_hash = $1
 LIMIT 1;
 
+-- The unclaimed transfers, for the pending re-check.
+--
+-- The pending run reads its worklist from here rather than from the upstream
+-- ledger. The upstream cannot be asked "which transfers are not claimed" -- it
+-- has no such field, and market/token-transfers takes only limit and offset -- so
+-- the only way to find them by walking it would be to read all 135 pages and
+-- discard what is already settled. The table already knows.
+--
+-- KEYSET, not OFFSET, and that is load-bearing rather than a preference. The run
+-- sets claimed = true on rows as it goes, so the NOT claimed set shrinks
+-- underneath the cursor: OFFSET 500 LIMIT 500 would step over the rows that fell
+-- into the band it had already read, and never check them. `id > after_id` cannot.
+--
+-- Oldest first, because a pending row is one waiting to be found claimed, and the
+-- stalest is the most overdue. id is a serial and inserts are chronological, so it
+-- orders the same way created_at would without needing a second sort key.
+-- name: ListPendingTransfers :many
+SELECT id, token_id, game_name, seller_id, buyer_id, item_name, price, currency,
+       tx_hash, image_url, created_at, claimed
+FROM marketplace_token_transfers
+WHERE NOT claimed
+  AND id > sqlc.arg('after_id')
+ORDER BY id
+LIMIT sqlc.arg('batch');
+
 -- name: InsertTokenTransfer :one
 INSERT INTO marketplace_token_transfers (
   token_id, game_name, seller_id, buyer_id, item_name, price, currency,

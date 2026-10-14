@@ -12,15 +12,15 @@
 -- ON CONSTRAINT` would fail on whichever did not match.
 
 -- name: GetSyncState :one
-SELECT kind, mode, running_since, last_started_at, last_finished_at, last_status,
-       last_stats, last_error
+SELECT kind, mode, running_since, last_started_at, last_finished_at, last_pending_at,
+       last_status, last_stats, last_error
 FROM sync_state
 WHERE kind = $1
 LIMIT 1;
 
 -- name: ListSyncStates :many
-SELECT kind, mode, running_since, last_started_at, last_finished_at, last_status,
-       last_stats, last_error
+SELECT kind, mode, running_since, last_started_at, last_finished_at, last_pending_at,
+       last_status, last_stats, last_error
 FROM sync_state
 ORDER BY kind ASC;
 
@@ -40,13 +40,30 @@ ON CONFLICT (kind) DO UPDATE SET
 -- mode is left out of the column list and so takes its default. The row records
 -- the mode of the most recent run only for display -- the UI labels a
 -- stale-but-running scrape -- and the run that is finishing already set it on
--- start.
+-- start. So the mode that decides whether last_pending_at moves is read from the
+-- parameter, not from EXCLUDED.mode: on this INSERT that would be the column
+-- default, and the update branch below would never fire.
+--
+-- last_pending_at moves only for a pending run, and that conditional living here
+-- rather than in a second statement the caller has to remember is the point:
+-- last_finished_at is rewritten by every run and the incremental cron fires every
+-- minute, so the daily pending schedule needs a column only pending runs touch.
+-- Stamped on failure too -- the point is "when did we last try", and a permanently
+-- failing job re-trying every few minutes would hammer an upstream where every
+-- request costs real capacity.
 -- name: UpsertSyncRunFinished :exec
-INSERT INTO sync_state (kind, running_since, last_finished_at, last_status, last_stats, last_error)
-VALUES ($1, NULL, $2, $3, $4, $5)
+INSERT INTO sync_state (
+  kind, running_since, last_finished_at, last_pending_at,
+  last_status, last_stats, last_error
+)
+VALUES ($1, NULL, $2, CASE WHEN sqlc.arg('mode')::text = 'pending' THEN $2 END, $3, $4, $5)
 ON CONFLICT (kind) DO UPDATE SET
   running_since = NULL,
   last_finished_at = EXCLUDED.last_finished_at,
+  last_pending_at = CASE
+    WHEN sqlc.arg('mode')::text = 'pending' THEN EXCLUDED.last_finished_at
+    ELSE sync_state.last_pending_at
+  END,
   last_status = EXCLUDED.last_status,
   last_stats = EXCLUDED.last_stats,
   last_error = EXCLUDED.last_error;

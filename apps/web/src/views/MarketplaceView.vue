@@ -1,10 +1,24 @@
 <template>
   <div class="p-5 space-y-3">
-    <div class="flex items-center justify-between gap-3">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
       <h2 class="text-2xl font-semibold">Marketplace</h2>
-      <!-- Passive only. The sync controls live on the admin Data page; this stays so
-           an admin who kicked off a run still sees the data moving. -->
-      <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
+      <!-- The last-sync readout is passive, but it is only visible to an admin and
+           says the data is being kept current. The button beside it appears only
+           when the server's scheduler is off, since a running one refreshes this
+           page's data every minute on its own. -->
+      <div v-if="sync.isAdmin" class="flex items-center gap-2">
+        <Button
+          v-if="sync.showManualSync"
+          variant="outline"
+          size="sm"
+          :disabled="sync.loading || mkt.running"
+          @click="syncLatest"
+        >
+          <Loader2 v-if="syncLatestSpinning" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          Sync Latest
+        </Button>
+        <span class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
+      </div>
     </div>
 
     <!-- Browse view (menu List) -->
@@ -669,6 +683,23 @@ const lastSyncedLabel = computed(() => {
   const n = mkt.value.lastSynced
   return `Last sync: ${formatDateTime(at)}${n === null ? '' : ` · ${n} new`}`
 })
+
+// The manual trigger, shown only when the server's scheduler is off.
+//
+// Bound to this view's own kind: Enqueue takes the kind, and a marketplace page
+// asking for a history run would report the marketplace's last-sync numbers with
+// a history run's stats. The store refreshes and resumes polling on its own
+// afterwards, so nothing has to be done here once the request is sent.
+const syncLatestSpinning = computed(() => mkt.value.running && mkt.value.mode === 'latest')
+
+async function syncLatest(): Promise<void> {
+  try {
+    await sync.enqueue({ kind: 'marketplace', mode: 'latest' })
+  } catch {
+    // The store surfaces this in `error`, which the alert below the toolbar
+    // already renders.
+  }
+}
 
 function syncModeLabel(mode: string | null | undefined): string {
   if (mode === 'all') return 'Full'

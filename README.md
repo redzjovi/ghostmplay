@@ -173,6 +173,74 @@ offset. Nothing is held open over an HTTP request: a trigger takes a lock, retur
 202, and the UI polls. If a deploy kills a run mid-flight it is marked `interrupted`
 on the next boot rather than spinning forever.
 
+**`CRON_ENABLED` gates the scheduler, and with it every button's reason to exist.**
+The flag defaults on and only the exact string `false` turns it off — a typo leaves the
+scheduler running, which is the safer of the two failures. Off means this process is
+API-only: no timers at all, not merely a slower one, so the daily pending re-check stops
+too. That is what the flag is *for* on Voroa, where syncing belongs to a separate
+service.
+
+With the scheduler off, an admin browsing a list page has no background job refreshing
+what they are looking at, so both the marketplace and history lists offer a **Sync Latest**
+button in the header. It is gated on admin *and* on the scheduler being off, and it is
+admin-gated almost for free: `cronEnabled` rides on the existing admin-only
+`/api/admin/sync/status` response, which the list views already fetch, so a non-admin
+never receives the flag. The button carries a `loaded` guard because `cronEnabled` is
+`undefined` before the first response arrives, and reading that as "off" would flash the
+control at every visitor on page load.
+
+**The daily pending re-check is measured from a watermark, not from the clock.**
+`sync_state.last_pending_at` records when a `pending` run last finished, and only a
+pending run may write it — `last_finished_at` cannot answer the question, because the
+incremental cron rewrites it every minute and takes the run's mode with it. The scheduler
+then checks that column on a 15-minute ticker and starts a re-check when the watermark is
+24 hours old or absent.
+
+Both obvious alternatives are wrong, and the reason is the same in each: `@every 24h` is
+measured from when the *process* started, so it resets on every deploy and never fires at
+all on a container redeployed more often than daily, while a wall-clock `0 0 * * *` would
+fire at midnight whether or not the last run had finished. Neither is "24 hours since the
+last pending run". This is also why it is a ticker rather than a `cron.Schedule`: `Next`
+takes no context and returns no error, which is the wrong shape for a query. A watermark
+in the future means the clock moved backwards, and reads as due rather than as "not yet" —
+the watermark is stamped from the same process clock, so it cannot be a standing
+disagreement between two machines.
+
+The check is coarse on purpose: the work is measured in hours when it is due at all, so 15
+minutes of granularity costs 96 single-row lookups a day, almost all of which do nothing.
+A run that cannot start — because one is already in flight, or because the enqueue failed
+— leaves the watermark where it was, so it stays due and the next tick picks it up. That
+is what stops one busy minute from costing a whole day, and it is also why the watermark
+is stamped on failure: a permanently failing job that reset the clock on success would
+never run at all, and one that reset it every few minutes would hammer an upstream where
+every request costs real capacity.
+
+**History's third mode reads its worklist from the database, not the market.**
+`pending` re-checks every transfer not yet recorded claimed, and it finds them with
+`WHERE NOT claimed` rather than by walking the ledger. The upstream has no
+"unclaimed" filter — `market/token-transfers` takes only `limit` and `offset` — so the
+only way to identify pending transfers by reading it would be to fetch every page and
+discard the ~98% that are already settled; the table already knows. For each one, the only
+question worth asking the market is whether the token is still listed, which
+`nft/item-detail` answers as 200-with-an-owner or 400. So the cost is one `item-detail`
+call per *unclaimed* transfer rather than per transfer — and because claimed is
+overwhelmingly the normal state, that is roughly a fiftieth of a full backfill.
+
+The worklist is read with a **keyset** cursor, and that is load-bearing rather than a
+preference: the run sets `claimed = true` as it goes, so the unclaimed set shrinks
+underneath it. `OFFSET 500 LIMIT 500` would step over the rows that fell into the band
+it had already read and silently never check them.
+
+What this mode deliberately cannot do is correct the transfer's own fields. `item-detail`
+returns no `seller_id`, `buyer_id`, `item_name`, `tx_hash`, `currency` or transfer time,
+so a change to any of those is only picked up by `full`, which is the one path that
+re-reads `market/token-transfers`. It also cannot revisit a claimed row: those are
+considered settled, since their detail answers 400 forever and can teach nothing. The
+`claimed` value it writes is always safe, because it only ever writes over rows that are
+currently false — every write is either a real transition or a no-op. Sold state is
+reconciled at the end regardless, because `MarkItemsSold` reads the whole ledger rather
+than what the walk touched.
+
 **The lock has no TTL, by design.** `LockService` is an in-process mutex with a
 compare-and-delete release, so a holder can only ever free its own lock. The keys
 never expire because the lock is released in a `defer`, and a lock cannot outlive

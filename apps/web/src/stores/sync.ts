@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { SyncKind, SyncKindStatus, SyncStatus, EnqueueSyncResult, ClearSyncDataResult } from '@/api/http-client'
 import { useAuthStore } from './auth'
+import { shouldShowManualSync } from '@/lib/syncPanel'
 
 /**
  * Sync is admin-only and runs in the background, so the UI never awaits a scrape.
@@ -58,6 +59,25 @@ export const useSyncStore = defineStore('sync', () => {
   /** Poll while *any* kind is running, so both pages stay live. */
   const anyRunning = computed(() => (['marketplace', 'history'] as const).some((k) => forKind(k).running))
 
+  /**
+   * Whether the server's scheduler is running, or null until the snapshot loads.
+   *
+   * Null is the third state and it matters: absent means "nobody has told me",
+   * which is not the same claim as "the scheduler is off". The store is the only
+   * place that knows whether a snapshot arrived, so the list views read the
+   * manual-trigger decision from here rather than re-deriving it.
+   */
+  const cronEnabled = computed<boolean | null>(() => status.value?.cronEnabled ?? null)
+
+  /** Whether the list views should offer a manual "Sync Latest" button. */
+  const showManualSync = computed(() =>
+    shouldShowManualSync({
+      isAdmin: isAdmin.value,
+      cronEnabled: cronEnabled.value,
+      loaded: status.value !== null,
+    }),
+  )
+
   function stopPolling() {
     if (timer) {
       clearTimeout(timer)
@@ -96,7 +116,7 @@ export const useSyncStore = defineStore('sync', () => {
    */
   async function enqueue(input: {
     kind: SyncKind
-    mode?: 'all' | 'latest' | 'full'
+    mode?: 'all' | 'latest' | 'full' | 'pending'
     itemName?: string
   }): Promise<EnqueueSyncResult> {
     loading.value = true
@@ -144,6 +164,8 @@ export const useSyncStore = defineStore('sync', () => {
     isAdmin,
     forKind,
     anyRunning,
+    cronEnabled,
+    showManualSync,
     refresh,
     start,
     stopPolling,

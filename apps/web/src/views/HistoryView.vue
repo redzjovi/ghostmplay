@@ -2,9 +2,23 @@
   <div class="p-5 space-y-3">
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <h2 class="text-2xl font-semibold">History</h2>
-      <!-- Passive only. The sync controls live on the admin Data page; this stays so
-           an admin who kicked off a run still sees the data moving. -->
-      <span v-if="sync.isAdmin" class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
+      <!-- The last-sync readout is passive, but it is only visible to an admin and
+           says the data is being kept current. The button beside it appears only
+           when the server's scheduler is off, since a running one refreshes this
+           page's data every minute on its own. -->
+      <div v-if="sync.isAdmin" class="flex items-center gap-2">
+        <Button
+          v-if="sync.showManualSync"
+          variant="outline"
+          size="sm"
+          :disabled="sync.loading || hist.running"
+          @click="syncLatest"
+        >
+          <Loader2 v-if="syncLatestSpinning" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          Sync Latest
+        </Button>
+        <span class="text-xs text-muted-foreground">{{ lastSyncedLabel }}</span>
+      </div>
     </div>
 
     <!-- Filters -->
@@ -346,6 +360,7 @@ const lastClaimed = computed(() => statOf(hist.value, 'claimed'))
 
 function syncModeLabel(mode: string | null | undefined): string {
   if (mode === 'full') return 'Full'
+  if (mode === 'pending') return 'Pending'
   if (mode === 'latest') return 'Latest'
   return ''
 }
@@ -553,6 +568,22 @@ const lastSyncedLabel = computed(() => {
   const n = hist.value.lastSynced
   return `Last sync: ${formatDateTime(at)}${n === null ? '' : ` · ${n} new`}`
 })
+
+// The manual trigger, shown only when the server's scheduler is off.
+//
+// Bound to this view's own kind, so the marketplace page's trigger cannot end up
+// reporting a history run's numbers as its own. The store refreshes and resumes
+// polling once the request is sent.
+const syncLatestSpinning = computed(() => hist.value.running && hist.value.mode === 'latest')
+
+async function syncLatest(): Promise<void> {
+  try {
+    await sync.enqueue({ kind: 'history', mode: 'latest' })
+  } catch {
+    // The store surfaces this in `error`, which the alert below the toolbar
+    // already renders.
+  }
+}
 
 onMounted(async () => {
   await store.fetchFilterOptions().catch(() => {})

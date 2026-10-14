@@ -305,6 +305,23 @@ func (s *HistoryService) ExistsByTxHash(ctx context.Context, txHash string) (boo
 	return found, nil
 }
 
+// ListPending returns unclaimed transfers with an id above afterID, oldest
+// first, at most batch of them.
+//
+// Keyset rather than offset because the caller sets claimed = true on rows as it
+// works through them, which shrinks the NOT claimed set underneath the cursor --
+// see ListPendingTransfers for why OFFSET would drop rows silently.
+func (s *HistoryService) ListPending(ctx context.Context, afterID int32, batch int) ([]dbgen.MarketplaceTokenTransfer, error) {
+	rows, err := s.queries.ListPendingTransfers(ctx, dbgen.ListPendingTransfersParams{
+		AfterID: afterID,
+		Batch:   int32(batch),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pending transfers: %w", err)
+	}
+	return rows, nil
+}
+
 // EnsureUser makes sure a wallet has a users row.
 //
 // Idempotent and race-safe: ON CONFLICT DO NOTHING rather than

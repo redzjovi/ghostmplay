@@ -49,15 +49,24 @@ func (a *ExecutorAdapter) SyncMarketplace(ctx context.Context, itemName string, 
 	return Stats{"synced": res.Synced}, nil
 }
 
-// SyncHistory fills the ledger, incrementally or in full.
-func (a *ExecutorAdapter) SyncHistory(ctx context.Context, full bool) (Stats, error) {
+// SyncHistory fills the ledger: incrementally, in full, or in full while
+// skipping transfers already recorded claimed.
+func (a *ExecutorAdapter) SyncHistory(ctx context.Context, mode marketplace.HistorySyncMode) (Stats, error) {
 	var (
 		res marketplace.HistorySyncResult
 		err error
 	)
-	if full {
+	// pages is reported only for a real upstream walk. The pending re-check does
+	// batched worklist reads against our own table, and reporting their count
+	// under a key that means "upstream pages" everywhere else would misdescribe it.
+	paged := false
+	switch mode {
+	case marketplace.HistoryFull:
+		paged = true
 		res, err = a.historySync.Backfill(ctx)
-	} else {
+	case marketplace.HistoryPending:
+		res, err = a.historySync.RecheckPending(ctx)
+	default:
 		res, err = a.historySync.RefreshLatest(ctx)
 	}
 	if err != nil {
@@ -71,8 +80,9 @@ func (a *ExecutorAdapter) SyncHistory(ctx context.Context, full bool) (Stats, er
 		"claimed":    res.Claimed,
 		"skipped":    res.Skipped,
 		"soldMarked": res.SoldMarked,
+		"pending":    res.Pending,
 	}
-	if full {
+	if paged {
 		stats["pages"] = res.Pages
 	}
 	return stats, nil
@@ -95,6 +105,11 @@ func (a *ExecutorAdapter) ClearHistory(ctx context.Context) (marketplace.History
 // runs overlapping, not the scheduler: a job that fired again while the previous
 // one was still walking would be deduped, which is the correct behaviour and
 // costs nothing.
+//
+// Two entries, and both are gated on CRON_ENABLED by the caller rather than here.
+// The pending due-check is coarse and almost always does nothing, so it costs
+// nothing to run alongside the minute job -- but it is still a scheduler, and a
+// deployment that turned the scheduler off should have no timers at all.
 func StartScheduler(scheduler *Scheduler, log *slog.Logger) (func(), error) {
 	c := cron.New()
 
@@ -104,8 +119,14 @@ func StartScheduler(scheduler *Scheduler, log *slog.Logger) (func(), error) {
 		return nil, err
 	}
 
+	if _, err := c.AddFunc(PendingDueCheckSchedule, func() {
+		scheduler.RunPendingIfDue(context.Background())
+	}); err != nil {
+		return nil, err
+	}
+
 	c.Start()
-	log.Info("sync scheduler started", "schedule", CronSchedule)
+	log.Info("sync scheduler started", "schedule", CronSchedule, "pendingCheck", PendingDueCheckSchedule)
 
 	// c.Stop() returns a context that is done once every running job has
 	// finished. Waiting on it means a deploy waits for an in-progress run rather

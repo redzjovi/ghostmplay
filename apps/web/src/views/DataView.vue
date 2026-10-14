@@ -68,6 +68,15 @@
             <Loader2 v-if="spinning(kind, backfillMode(kind))" class="mr-2 h-4 w-4 animate-spin" />
             {{ buttonLabel(backfillMode(kind)) }}
           </Button>
+          <Button
+            v-if="kind === 'history'"
+            variant="outline"
+            :disabled="isBusy(kind)"
+            @click="trigger(kind, PENDING_MODE)"
+          >
+            <Loader2 v-if="spinning(kind, PENDING_MODE)" class="mr-2 h-4 w-4 animate-spin" />
+            {{ buttonLabel(PENDING_MODE) }}
+          </Button>
           <span class="text-xs text-muted-foreground">
             <template v-if="deduped[kind]">Joined the run already in progress.</template>
           </span>
@@ -131,6 +140,7 @@ import { formatDateTime } from '@/lib/format'
 import type { SyncKind, SyncKindStatus, ClearSyncDataResult } from '@/api/http-client'
 import {
   PANEL_KINDS,
+  PENDING_MODE,
   backfillMode,
   modeLabel,
   statOf,
@@ -144,7 +154,8 @@ const KIND_TITLES: Record<SyncKind, string> = {
 
 const KIND_BLURBS: Record<SyncKind, string> = {
   marketplace: 'Scrapes the live item list. Sync All walks every page from the start.',
-  history: 'Scrapes the transfer log, which is also what decides sold state.',
+  history:
+    'Scrapes the transfer log, which is also what decides sold state. Sync Pending asks the market about every transfer not yet claimed, to find the ones whose token has since been claimed and to refresh buyer names — it cannot correct price or item name, so Sync All is still the way to re-read the ledger.',
 }
 
 /**
@@ -174,6 +185,10 @@ const KIND_STATS: Record<SyncKind, { key: string; label: string }[]> = {
     { key: 'soldMarked', label: 'Marked sold' },
     { key: 'enriched', label: 'Enriched' },
     { key: 'claimed', label: 'Claimed' },
+    // Only a pending run reports this. It is how many unclaimed transfers the run
+    // took as its worklist, and so how many upstream requests it spent — which is
+    // the number that makes a pending run's cost legible next to a full one.
+    { key: 'pending', label: 'Pending checked' },
   ],
 }
 
@@ -202,7 +217,9 @@ function finishedLabel(status: SyncKindStatus): string {
 }
 
 function buttonLabel(mode: string): string {
-  return mode === 'latest' ? 'Sync Latest' : 'Sync All'
+  if (mode === 'latest') return 'Sync Latest'
+  if (mode === PENDING_MODE) return 'Sync Pending'
+  return 'Sync All'
 }
 
 /**
@@ -219,7 +236,10 @@ function spinning(kind: SyncKind, mode: string): boolean {
   return status.running && status.mode === mode
 }
 
-async function trigger(kind: SyncKind, mode: 'latest' | 'all' | 'full'): Promise<void> {
+async function trigger(
+  kind: SyncKind,
+  mode: 'latest' | 'all' | 'full' | 'pending',
+): Promise<void> {
   deduped.value[kind] = false
   try {
     // No options to thread through. The server still accepts `itemName`, but a

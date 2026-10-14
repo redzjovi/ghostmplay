@@ -219,7 +219,7 @@ func wire(env config.Env, log *slog.Logger, queries dbgen.Querier, txManager dat
 		Marketplace: marketplace.NewController(marketplaceService, upstream, log, env),
 		History:     marketplace.NewHistoryController(historyService, log, env),
 		Favorites:   marketplace.NewFavoritesController(marketplaceService),
-		Sync:        sync.NewController(orchestrator),
+		Sync:        sync.NewController(orchestrator, env.CronEnabled),
 	})
 
 	// A no-op rather than nil, and not merely for tidiness: main defers
@@ -239,6 +239,11 @@ func wire(env config.Env, log *slog.Logger, queries dbgen.Querier, txManager dat
 		// Logged rather than left silent. Nothing here starts a timer, and an
 		// absent "sync scheduler started" line is otherwise indistinguishable
 		// from a scheduler that failed to start.
+		//
+		// This also disables the daily pending re-check, not just the per-minute
+		// one -- there are no timers at all when the scheduler is off, which is
+		// why the list views offer a manual "Sync Latest" instead. The pending
+		// re-check stays reachable from the admin Data page.
 		log.Info("sync scheduler disabled", "enabledBy", "CRON_ENABLED",
 			"consequence", "data is synced only on request from the admin panel")
 	}

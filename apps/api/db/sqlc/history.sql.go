@@ -353,6 +353,73 @@ func (q *Queries) ListDistinctSellerNames(ctx context.Context) ([]sql.NullString
 	return items, nil
 }
 
+const listPendingTransfers = `-- name: ListPendingTransfers :many
+SELECT id, token_id, game_name, seller_id, buyer_id, item_name, price, currency,
+       tx_hash, image_url, created_at, claimed
+FROM marketplace_token_transfers
+WHERE NOT claimed
+  AND id > $1
+ORDER BY id
+LIMIT $2
+`
+
+type ListPendingTransfersParams struct {
+	AfterID int32 `json:"after_id"`
+	Batch   int32 `json:"batch"`
+}
+
+// The unclaimed transfers, for the pending re-check.
+//
+// The pending run reads its worklist from here rather than from the upstream
+// ledger. The upstream cannot be asked "which transfers are not claimed" -- it
+// has no such field, and market/token-transfers takes only limit and offset -- so
+// the only way to find them by walking it would be to read all 135 pages and
+// discard what is already settled. The table already knows.
+//
+// KEYSET, not OFFSET, and that is load-bearing rather than a preference. The run
+// sets claimed = true on rows as it goes, so the NOT claimed set shrinks
+// underneath the cursor: OFFSET 500 LIMIT 500 would step over the rows that fell
+// into the band it had already read, and never check them. `id > after_id` cannot.
+//
+// Oldest first, because a pending row is one waiting to be found claimed, and the
+// stalest is the most overdue. id is a serial and inserts are chronological, so it
+// orders the same way created_at would without needing a second sort key.
+func (q *Queries) ListPendingTransfers(ctx context.Context, arg ListPendingTransfersParams) ([]MarketplaceTokenTransfer, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingTransfers, arg.AfterID, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MarketplaceTokenTransfer{}
+	for rows.Next() {
+		var i MarketplaceTokenTransfer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TokenID,
+			&i.GameName,
+			&i.SellerID,
+			&i.BuyerID,
+			&i.ItemName,
+			&i.Price,
+			&i.Currency,
+			&i.TxHash,
+			&i.ImageUrl,
+			&i.CreatedAt,
+			&i.Claimed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTokenTransfersRecent = `-- name: ListTokenTransfersRecent :many
 
 SELECT t.id, t.token_id, t.game_name, t.seller_id, su.username AS seller_username,

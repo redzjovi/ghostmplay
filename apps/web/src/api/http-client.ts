@@ -132,6 +132,15 @@ export interface SyncKindStatus {
 export interface SyncStatus {
   marketplace: SyncKindStatus
   history: SyncKindStatus
+  /**
+   * Whether the server's background scheduler is running. False means nothing
+   * syncs on its own, which is what the list views offer a manual trigger for.
+   *
+   * The endpoint is admin-only, so this is simply absent for anyone else -- the
+   * store never fetches it for a non-admin, which is what makes the manual button
+   * admin-only without a second check in the template.
+   */
+  cronEnabled?: boolean
 }
 
 /** `deduped` means a run of this kind was already going and this call joined it. */
@@ -169,12 +178,12 @@ export interface WebApi {
     sync: {
       status(): Promise<SyncStatus>
       /**
-       * `mode` is narrowed rather than `string` because the server accepts all
-       * three values for either kind but only dispatches on `all` for marketplace
-       * and `full` for history — a mismatch is silently downgraded to the
+       * `mode` is narrowed rather than `string` because the server accepts every
+       * value for either kind but only dispatches on `all` for marketplace and on
+       * `full`/`pending` for history — a mismatch is silently downgraded to the
        * incremental run instead of rejected. See lib/syncPanel.backfillMode.
        */
-      enqueue(input: { kind: SyncKind; mode?: 'all' | 'latest' | 'full'; itemName?: string }): Promise<EnqueueSyncResult>
+      enqueue(input: { kind: SyncKind; mode?: 'all' | 'latest' | 'full' | 'pending'; itemName?: string }): Promise<EnqueueSyncResult>
       /**
        * Deletes everything a kind of scraper owns. Irreversible, admin-only, and
        * 409 while that kind is running. `confirm` is a body field rather than a UI

@@ -2,12 +2,14 @@ package marketplace
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
+	dbgen "github.com/redzjovi/ghostmplay/apps/api/db/sqlc"
 	"github.com/redzjovi/ghostmplay/apps/api/internal/modules/marketplace/api"
 )
 
@@ -39,7 +41,30 @@ type HistorySyncResult struct {
 	Skipped    int   `json:"skipped"`
 	SoldMarked int   `json:"soldMarked"`
 	Pages      int   `json:"pages,omitempty"`
+	// Pending is how many unclaimed transfers the pending re-check took as its
+	// worklist, and therefore how many upstream detail calls it spent. It is the
+	// number that explains a pending run's cost, so it is reported rather than
+	// inferred from Synced. Zero for every other mode.
+	Pending int `json:"pending"`
 }
+
+// HistorySyncMode is how far a history run walks, and what it declines to store.
+//
+// It exists for the same reason SyncMode does on the marketplace side: the
+// orchestrator needs to say which of several walks to take, and a bool cannot
+// name three of them.
+type HistorySyncMode string
+
+const (
+	// HistoryLatest stops at the first transfer already stored. The per-minute path.
+	HistoryLatest HistorySyncMode = "latest"
+	// HistoryFull walks the whole ledger and re-asks the upstream about every
+	// transfer on it. The most expensive operation in the app.
+	HistoryFull HistorySyncMode = "full"
+	// HistoryPending re-checks every transfer not yet recorded claimed, asking
+	// the upstream only about each token's current owner.
+	HistoryPending HistorySyncMode = "pending"
+)
 
 // ownerResult is what resolving a token's current owner produced.
 type ownerResult struct {
@@ -128,6 +153,147 @@ func (s *HistorySyncService) Backfill(ctx context.Context) (HistorySyncResult, e
 	result.Pages = page
 
 	return result, nil
+}
+
+// pendingBatch is how many unclaimed transfers one worklist read returns.
+//
+// Not the upstream page size: nothing here is constrained by what the market will
+// serve in one request, so this is chosen purely to keep the number of round
+// trips down while bounding how much is held in memory between the read and the
+// detail fan-out.
+const pendingBatch = 500
+
+// RecheckPending asks the upstream about every transfer not yet recorded claimed,
+// and stores what it learns.
+//
+// The worklist comes from the database rather than from the upstream ledger, and
+// that is the whole point. The upstream has no "unclaimed" filter --
+// market/token-transfers takes only limit and offset -- so the only way to
+// identify pending transfers by reading it would be to fetch all 135 pages and
+// throw away the 98% that are already settled. The table knows which ones those
+// are without asking anyone.
+//
+// For each one, the only thing worth asking the market is the token's current
+// owner: nft/item-detail answers 200 with an ownerName while the token is still
+// listed, and 400 once it has been claimed. That is a claim about the token, not
+// about the transfer, and it is the only claim item-detail is equipped to make --
+// it returns no seller_id, buyer_id, item_name, tx_hash, currency or transfer
+// time, so this mode cannot correct those and must not pretend to. The `full`
+// backfill is the only way to pick up a change to them.
+//
+// The upsert rewrites the transfer's own fields with the values already stored,
+// which is a deliberate no-op: they came from market/token-transfers and nothing
+// has asked the upstream for them since. What actually changes is buyer_username
+// and claimed, and every claimed value written here is either a real false->true
+// transition or a no-op -- the only rows this touches are currently false, so
+// there is no path that writes false over true, which is what would need the
+// tri-state handling a transient detail failure deserves.
+//
+// Sold state is reconciled at the end regardless, because MarkItemsSold reads the
+// whole ledger rather than what this walk touched, and an earlier run may have
+// stored a transfer whose item row did not exist yet.
+func (s *HistorySyncService) RecheckPending(ctx context.Context) (HistorySyncResult, error) {
+	result := HistorySyncResult{}
+
+	// Keyset, and advanced from the last row of the batch as it was READ rather
+	// than from what survived processing -- the rows this run marks claimed leave
+	// the result set, so the cursor has to be a position in id space, not an
+	// index into a list that is shrinking underneath it.
+	afterID := int32(0)
+	for {
+		rows, err := s.history.ListPending(ctx, afterID, pendingBatch)
+		if err != nil {
+			return HistorySyncResult{}, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+
+		mapped := make([]mappedTransfer, 0, len(rows))
+		for _, r := range rows {
+			mapped = append(mapped, mappedFromStored(r))
+		}
+		result.Pending += len(mapped)
+
+		resolved, err := pool(ctx, backfillConcurrency, mapped,
+			func(m mappedTransfer) int32 { return m.tokenID },
+			func(m mappedTransfer) (ownerResult, error) { return s.resolveOwnerInline(ctx, m.tokenID) })
+		if err != nil {
+			return HistorySyncResult{}, err
+		}
+
+		for _, m := range mapped {
+			r := resolved[m.tokenID]
+			if _, err := s.history.UpsertFromApi(ctx, m.toInput(r)); err != nil {
+				return HistorySyncResult{}, err
+			}
+			result.Synced++
+			if r.buyerUsername != "" {
+				result.Enriched++
+			}
+			if r.claimed {
+				result.Claimed++
+			}
+		}
+
+		afterID = rows[len(rows)-1].ID
+		s.log.Info("pending batch", "after_id", afterID, "checked", result.Pending,
+			"claimed", result.Claimed)
+
+		// A short batch means there is nothing after it. Checking this rather
+		// than looping to an empty read saves one round trip per run, which is
+		// most of them.
+		if len(rows) < pendingBatch {
+			break
+		}
+	}
+
+	marked, err := s.reconcileSold(ctx)
+	if err != nil {
+		return HistorySyncResult{}, err
+	}
+	result.SoldMarked = marked
+
+	return result, nil
+}
+
+// mappedFromStored rebuilds the scrape-shaped view of a transfer already in the
+// table, so the pending re-check can hand it to the same resolve-then-upsert path
+// the upstream walks use.
+//
+// createdAt is taken verbatim from Postgres and deliberately NOT run back through
+// ParseTransferTime. That function exists because the upstream sends a bare KST
+// string with no offset and reading it as UTC would store every transfer nine
+// hours ahead; a timestamptz column is already an absolute instant, and feeding
+// it to that parser would apply the same nine-hour shift to a value that was
+// never wrong.
+func mappedFromStored(r dbgen.MarketplaceTokenTransfer) mappedTransfer {
+	return mappedTransfer{
+		tokenID:   r.TokenID,
+		txHash:    r.TxHash,
+		gameName:  storedOptional(r.GameName),
+		sellerID:  r.SellerID,
+		buyerID:   r.BuyerID,
+		itemName:  r.ItemName,
+		price:     r.Price,
+		currency:  r.Currency,
+		imageURL:  storedOptional(r.ImageUrl),
+		createdAt: r.CreatedAt,
+	}
+}
+
+// storedOptional turns a stored nullable column back into the optional shape the
+// scrape-shaped struct uses.
+//
+// The counterpart to nullableString, which goes the other way. A NULL and a
+// stored empty string both collapse to nil, matching mapTransfer: a blank game
+// name would otherwise reach the filter dropdowns as an empty option.
+func storedOptional(v sql.NullString) *string {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	s := v.String
+	return &s
 }
 
 // RefreshLatest fetches only the first page and stops at the first known

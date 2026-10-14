@@ -92,6 +92,7 @@ func (f *fakeQuerier) ResetSyncState(_ context.Context, kind string) error {
 type fakeExecutor struct {
 	mu          sync.Mutex
 	calls       []string
+	historyMode marketplace.HistorySyncMode
 	failures    int // number of leading calls that fail transiently
 	block       chan struct{}
 	clearedKind string
@@ -113,15 +114,53 @@ func (e *fakeExecutor) SyncMarketplace(_ context.Context, _ string, _ marketplac
 	return Stats{"synced": n}, nil
 }
 
-func (e *fakeExecutor) SyncHistory(_ context.Context, _ bool) (Stats, error) {
+func (e *fakeExecutor) SyncHistory(_ context.Context, mode marketplace.HistorySyncMode) (Stats, error) {
 	e.mu.Lock()
 	e.calls = append(e.calls, "history")
+	e.historyMode = mode
 	n := len(e.calls)
 	e.mu.Unlock()
 	if n == 1 && e.failures > 0 {
 		return nil, httpErr{503}
 	}
 	return Stats{"synced": n}, nil
+}
+
+// A history mode the dispatch does not name is not rejected -- it falls through
+// to the incremental walk, logs nothing, and returns a normal "done". That is the
+// same silent downgrade lib/syncPanel.backfillMode warns the UI about, so the
+// mapping is pinned here rather than trusted: a mode added to Mode without a case
+// in execute fails this test instead of quietly becoming HistoryLatest.
+func TestHistoryModeDispatch(t *testing.T) {
+	tests := []struct {
+		mode Mode
+		want marketplace.HistorySyncMode
+	}{
+		{ModeLatest, marketplace.HistoryLatest},
+		{ModeFull, marketplace.HistoryFull},
+		{ModePending, marketplace.HistoryPending},
+		{ModeAll, marketplace.HistoryLatest}, // marketplace's backfill; not a history walk
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			q := newFakeQuerier()
+			exec := &fakeExecutor{}
+			orch := NewOrchestrator(q, common.NewLockService(), exec, testLogger())
+
+			if _, err := orch.Enqueue(context.Background(), EnqueueOptions{Kind: KindHistory, Mode: tc.mode}); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			orch.Wait(context.Background(), KindHistory)
+
+			exec.mu.Lock()
+			got := exec.historyMode
+			exec.mu.Unlock()
+			if got != tc.want {
+				t.Errorf("executor got mode %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func (e *fakeExecutor) ClearMarketplace(_ context.Context) (marketplace.ClearResult, error) {
@@ -292,7 +331,7 @@ func (e *failingExecutor) SyncMarketplace(_ context.Context, _ string, _ marketp
 	return nil, e.err
 }
 
-func (e *failingExecutor) SyncHistory(_ context.Context, _ bool) (Stats, error) {
+func (e *failingExecutor) SyncHistory(_ context.Context, _ marketplace.HistorySyncMode) (Stats, error) {
 	e.mu.Lock()
 	e.calls = append(e.calls, "history")
 	e.mu.Unlock()

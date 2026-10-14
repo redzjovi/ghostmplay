@@ -27,10 +27,22 @@ export function backfillMode(kind: SyncKind): 'all' | 'full' {
   return kind === 'history' ? 'full' : 'all'
 }
 
+/**
+ * The history-only walk that skips transfers already recorded claimed.
+ *
+ * Not reachable through `backfillMode`, because the marketplace has no
+ * equivalent: there is no claimed flag on a listing, so there is nothing for it
+ * to skip. `pending` is history's alone and the server maps it to
+ * `HistoryPending` — anything else, including `full`, falls through to the
+ * incremental run.
+ */
+export const PENDING_MODE = 'pending' as const
+
 /** How a run is described in the UI. "Sync All" is the label for either backfill. */
 export function modeLabel(mode: string | null | undefined): string {
   if (mode === 'all') return 'Sync All'
   if (mode === 'full') return 'Sync All'
+  if (mode === 'pending') return 'Sync Pending'
   if (mode === 'latest') return 'Sync Latest'
   return 'Sync'
 }
@@ -54,4 +66,30 @@ export function statusLabel(status: SyncKindStatus): string {
 export function statOf(status: SyncKindStatus, key: string): number | null {
   const v = status.lastStats?.[key]
   return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/**
+ * Whether the list views should offer a manual "Sync Latest".
+ *
+ * A plain function because the vitest config runs in node with no DOM and no
+ * component testing library, so anything worth asserting about has to be
+ * callable directly. See syncPanel.spec.ts.
+ *
+ * Three conditions, and the third is the one that is easy to forget. Until the
+ * status snapshot has actually loaded, `cronEnabled` is `undefined` -- and a
+ * naive `cronEnabled === false` is already false-y enough to read as "the
+ * scheduler is off". Without `loaded`, the button would flash for every visitor
+ * on page load and then vanish once auth resolved, which is worse than not
+ * offering it at all: it advertises a control that may not work.
+ *
+ * Admin-only is not enforced here so much as inherited: the status endpoint is
+ * guarded server-side and the store never calls it for a non-admin, so a
+ * non-admin has no snapshot and therefore no `cronEnabled` to act on.
+ */
+export function shouldShowManualSync(input: {
+  isAdmin: boolean
+  cronEnabled: boolean | null | undefined
+  loaded: boolean
+}): boolean {
+  return input.loaded && input.isAdmin && input.cronEnabled === false
 }

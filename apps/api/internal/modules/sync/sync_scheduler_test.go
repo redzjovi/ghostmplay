@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func (e *recordingExecutor) SyncMarketplace(_ context.Context, _ string, _ marke
 	return Stats{"synced": 1}, nil
 }
 
-func (e *recordingExecutor) SyncHistory(_ context.Context, _ bool) (Stats, error) {
+func (e *recordingExecutor) SyncHistory(_ context.Context, _ marketplace.HistorySyncMode) (Stats, error) {
 	e.begin("history")
 	return Stats{"synced": 1}, nil
 }
@@ -135,6 +136,118 @@ func TestSchedulerJoinsAnInFlightRun(t *testing.T) {
 	// the scheduler started its own; joining means it did not.
 	if marketplaceRuns != 1 {
 		t.Errorf("marketplace ran %d times, want 1 (the scheduler joined the in-flight run)", marketplaceRuns)
+	}
+}
+
+// The pending re-check is due-or-not as a function of the watermark, and every
+// boundary is pinned: this is the whole contract of RunPendingIfDue, and getting
+// it wrong either hammers the upstream on every tick or skips the re-check
+// indefinitely.
+//
+// The clock is injected rather than read, so "exactly 24h" is a case rather than
+// something that depends on how long the test took to run.
+func TestRunPendingIfDue(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	hoursAgo := func(h float64) sql.NullTime {
+		return sql.NullTime{Time: now.Add(-time.Duration(h * float64(time.Hour))), Valid: true}
+	}
+
+	tests := []struct {
+		name      string
+		watermark sql.NullTime
+		// wantRun is whether a history pending re-check should have started.
+		wantRun bool
+	}{
+		{"never run is overdue", sql.NullTime{}, true},
+		{"a quarter of an interval is not due", hoursAgo(6), false},
+		{"almost an interval is not due", hoursAgo(23), false},
+		// >= and not >, so a job that runs exactly on time does not then wait
+		// another full interval because of a rounding hair.
+		{"exactly one interval is due", hoursAgo(24), true},
+		{"past one interval is due", hoursAgo(25), true},
+		{"far past is due", hoursAgo(72), true},
+		// A clock that moved backwards -- NTP, a hand-set host -- must not park
+		// the job for longer than one interval.
+		{"a future watermark is due", hoursAgo(-1), true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newFakeQuerier()
+			q.states[string(KindHistory)] = dbgen.SyncState{
+				Kind:          string(KindHistory),
+				LastPendingAt: tc.watermark,
+			}
+			exec := &fakeExecutor{}
+			orch := NewOrchestrator(q, common.NewLockService(), exec, testLogger())
+			scheduler := NewScheduler(orch, testLogger())
+			scheduler.now = func() time.Time { return now }
+
+			scheduler.RunPendingIfDue(context.Background())
+			orch.Wait(context.Background(), KindHistory)
+
+			exec.mu.Lock()
+			started := false
+			for _, c := range exec.calls {
+				if c == "history" {
+					started = true
+				}
+			}
+			gotMode := exec.historyMode
+			exec.mu.Unlock()
+
+			if started != tc.wantRun {
+				t.Fatalf("pending re-check started = %v, want %v", started, tc.wantRun)
+			}
+			if tc.wantRun && gotMode != marketplace.HistoryPending {
+				t.Errorf("executor got mode %q, want pending", gotMode)
+			}
+		})
+	}
+}
+
+// A missing row is the same as a missing watermark, not an error: the re-check
+// has never run, so it is due.
+func TestRunPendingIfDueWithoutASyncStateRow(t *testing.T) {
+	q := newFakeQuerier() // no states at all, so GetSyncState returns ErrNoRows
+	exec := &fakeExecutor{}
+	orch := NewOrchestrator(q, common.NewLockService(), exec, testLogger())
+
+	NewScheduler(orch, testLogger()).RunPendingIfDue(context.Background())
+	orch.Wait(context.Background(), KindHistory)
+
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	for _, c := range exec.calls {
+		if c == "history" {
+			return
+		}
+	}
+	t.Error("a missing sync_state row was treated as 'not due' rather than 'never run'")
+}
+
+// Only a pending run may move the watermark. It is written by the same statement
+// that records the outcome, so an incremental run -- which the cron fires every
+// minute -- must leave it alone or the re-check would never come due again.
+func TestFinishRecordsTheModeSoOnlyPendingMovesTheWatermark(t *testing.T) {
+	q := newFakeQuerier()
+	exec := &fakeExecutor{}
+	orch := NewOrchestrator(q, common.NewLockService(), exec, testLogger())
+
+	if _, err := orch.Enqueue(context.Background(), EnqueueOptions{
+		Kind: KindHistory, Mode: ModeLatest,
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	orch.Wait(context.Background(), KindHistory)
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.finished) != 1 {
+		t.Fatalf("finished writes = %d, want 1", len(q.finished))
+	}
+	if got := q.finished[0].Mode; got != string(ModeLatest) {
+		t.Errorf("finished write recorded mode %q, want %q", got, ModeLatest)
 	}
 }
 

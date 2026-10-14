@@ -182,6 +182,23 @@ type Querier interface {
 	// which drops empty filters before it ever reaches SQL, so a client sending
 	// `?equipment_type=` and one sending nothing get the same result.
 	ListMarketplaceItemsRecent(ctx context.Context, arg ListMarketplaceItemsRecentParams) ([]MarketplaceItem, error)
+	// The unclaimed transfers, for the pending re-check.
+	//
+	// The pending run reads its worklist from here rather than from the upstream
+	// ledger. The upstream cannot be asked "which transfers are not claimed" -- it
+	// has no such field, and market/token-transfers takes only limit and offset -- so
+	// the only way to find them by walking it would be to read all 135 pages and
+	// discard what is already settled. The table already knows.
+	//
+	// KEYSET, not OFFSET, and that is load-bearing rather than a preference. The run
+	// sets claimed = true on rows as it goes, so the NOT claimed set shrinks
+	// underneath the cursor: OFFSET 500 LIMIT 500 would step over the rows that fell
+	// into the band it had already read, and never check them. `id > after_id` cannot.
+	//
+	// Oldest first, because a pending row is one waiting to be found claimed, and the
+	// stalest is the most overdue. id is a serial and inserts are chronological, so it
+	// orders the same way created_at would without needing a second sort key.
+	ListPendingTransfers(ctx context.Context, arg ListPendingTransfersParams) ([]MarketplaceTokenTransfer, error)
 	ListSyncStates(ctx context.Context) ([]SyncState, error)
 	// marketplace_token_transfers + users queries.
 	//
@@ -274,7 +291,17 @@ type Querier interface {
 	// mode is left out of the column list and so takes its default. The row records
 	// the mode of the most recent run only for display -- the UI labels a
 	// stale-but-running scrape -- and the run that is finishing already set it on
-	// start.
+	// start. So the mode that decides whether last_pending_at moves is read from the
+	// parameter, not from EXCLUDED.mode: on this INSERT that would be the column
+	// default, and the update branch below would never fire.
+	//
+	// last_pending_at moves only for a pending run, and that conditional living here
+	// rather than in a second statement the caller has to remember is the point:
+	// last_finished_at is rewritten by every run and the incremental cron fires every
+	// minute, so the daily pending schedule needs a column only pending runs touch.
+	// Stamped on failure too -- the point is "when did we last try", and a permanently
+	// failing job re-trying every few minutes would hammer an upstream where every
+	// request costs real capacity.
 	UpsertSyncRunFinished(ctx context.Context, arg UpsertSyncRunFinishedParams) error
 	// Only the in-flight columns are written on start. last_finished_at, last_stats
 	// and last_error deliberately keep the previous run's values, so a run that is

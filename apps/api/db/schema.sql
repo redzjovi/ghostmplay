@@ -289,6 +289,21 @@ CREATE TABLE sync_state (
     running_since    timestamp with time zone,
     last_started_at  timestamp with time zone,
     last_finished_at timestamp with time zone,
+    -- When a `pending` run last finished, which is not the same question as
+    -- last_finished_at. That column is rewritten by every incremental run, and
+    -- the incremental cron fires every minute, so it always answers "when did
+    -- anything last run" -- never "when did the pending re-check last run". The
+    -- daily pending schedule is measured from this one instead, which is why it
+    -- cannot be derived from the row: by the time anything asked, the evidence
+    -- would have been overwritten.
+    --
+    -- Null means the re-check has never run, which reads as due immediately --
+    -- a re-check that has never happened is overdue by any interval.
+    --
+    -- Only the `pending` mode writes it, and "clear all" deliberately does not:
+    -- a cleared ledger has nothing pending, so the daily job would find zero
+    -- rows in a single query.
+    last_pending_at  timestamp with time zone,
     last_status      text,
     last_stats       jsonb,
     last_error       text,

@@ -94,6 +94,7 @@ type SyncState struct {
 	RunningSince   sql.NullTime          `json:"running_since"`
 	LastStartedAt  sql.NullTime          `json:"last_started_at"`
 	LastFinishedAt sql.NullTime          `json:"last_finished_at"`
+	LastPendingAt  sql.NullTime          `json:"last_pending_at"`
 	LastStatus     sql.NullString        `json:"last_status"`
 	LastStats      pqtype.NullRawMessage `json:"last_stats"`
 	LastError      sql.NullString        `json:"last_error"`

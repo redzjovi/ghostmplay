@@ -10,6 +10,14 @@
 # (what sqlc reads) and the migration (what runs) cannot drift, which is the one
 # failure mode here that would be silent: sqlc would type-check against columns
 # that do not exist.
+#
+# FROZEN. 000001 is not to be regenerated again -- 000002 added a column to
+# sync_state, and rewriting the baseline to include it would leave every already-
+# migrated database permanently missing it, while a FRESH database would run
+# 000001 (with the column) and then 000002 (adding it again) and fail on the
+# duplicate. Both failures are worse than the drift this script prevents. Add a
+# numbered migration instead: edit db/schema.sql so sqlc sees the change, and put
+# the DDL in the new file.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

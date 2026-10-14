@@ -14,11 +14,17 @@ import (
 // inside this file, so there is one place that decides which routes are guarded.
 type Controller struct {
 	orchestrator *Orchestrator
+	// cronEnabled is deployment configuration the orchestrator has no business
+	// knowing about. It rides on the status snapshot because that is the one call
+	// the list views already make, and because this endpoint is admin-guarded:
+	// handing the flag to a visitor who cannot use it would be information they
+	// have no use for.
+	cronEnabled bool
 }
 
 // NewController builds the controller.
-func NewController(orchestrator *Orchestrator) *Controller {
-	return &Controller{orchestrator: orchestrator}
+func NewController(orchestrator *Orchestrator, cronEnabled bool) *Controller {
+	return &Controller{orchestrator: orchestrator, cronEnabled: cronEnabled}
 }
 
 // Register mounts the routes onto an already-guarded group.
@@ -37,6 +43,7 @@ func (h *Controller) Status(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	snapshot.CronEnabled = h.cronEnabled
 	return c.JSON(snapshot)
 }
 
@@ -107,15 +114,15 @@ func parseEnqueueRequest(body []byte) (EnqueueOptions, error) {
 	opts := EnqueueOptions{Kind: Kind(kind), Mode: ModeLatest}
 
 	// Mode is optional and defaults to latest. An unrecognised value is rejected
-	// rather than ignored: mode selects between a cheap minute-long crawl and a
-	// full backfill, and silently downgrading one to the other is the kind of
-	// thing that is discovered days later.
+	// rather than ignored: mode selects between a cheap minute-long crawl, a full
+	// backfill and a pending-only one, and silently downgrading one to the other is
+	// the kind of thing that is discovered days later.
 	if mode := strings.TrimSpace(stringField(raw, "mode")); mode != "" {
 		switch Mode(mode) {
-		case ModeLatest, ModeAll, ModeFull:
+		case ModeLatest, ModeAll, ModeFull, ModePending:
 			opts.Mode = Mode(mode)
 		default:
-			return EnqueueOptions{}, common.BadRequest("mode must be one of: all, latest, full")
+			return EnqueueOptions{}, common.BadRequest("mode must be one of: all, latest, full, pending")
 		}
 	}
 
